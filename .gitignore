@@ -1,0 +1,7 @@
+# personal state — regenerated on first run / contains your trade history
+quant.db
+config.json
+once.json
+once.err
+__pycache__/
+*.pyc
