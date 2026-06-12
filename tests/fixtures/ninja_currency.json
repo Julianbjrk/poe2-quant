@@ -1,0 +1,30 @@
+{
+  "core": {
+    "primary": "divine",
+    "rates": {"exalted": 400.0, "chaos": 30.0},
+    "items": [
+      {"id": "divine", "name": "Divine Orb"},
+      {"id": "exalted", "name": "Exalted Orb"},
+      {"id": "chaos", "name": "Chaos Orb"}
+    ]
+  },
+  "items": [
+    {"id": "divine", "name": "Divine Orb"},
+    {"id": "exalted", "name": "Exalted Orb"},
+    {"id": "chaos", "name": "Chaos Orb"},
+    {"id": "test-orb", "name": "Test Orb"},
+    {"id": "alpha-orb", "name": "Alpha Orb"}
+  ],
+  "lines": [
+    {"id": "divine", "primaryValue": 1.0, "volumePrimaryValue": 5000,
+     "sparkline": {"totalChange": 0.5, "data": [0, 0.2, 0.5]}},
+    {"id": "exalted", "primaryValue": 0.0025, "volumePrimaryValue": 9000,
+     "sparkline": {"totalChange": 0.0, "data": [0, 0, 0]}},
+    {"id": "chaos", "primaryValue": 0.075, "volumePrimaryValue": 800,
+     "sparkline": {"totalChange": -1.0, "data": [0, -0.5, -1.0]}},
+    {"id": "test-orb", "primaryValue": 0.25, "volumePrimaryValue": 2000,
+     "sparkline": {"totalChange": -2.0, "data": [0, -1, -2]}},
+    {"id": "alpha-orb", "primaryValue": 0.125, "volumePrimaryValue": 1000,
+     "sparkline": {"totalChange": 1.0, "data": [0, 0.5, 1]}}
+  ]
+}

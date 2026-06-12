@@ -1,3 +1,6 @@
+// FROZEN as of v1.0 — superseded by the local app (quant.py), which now covers
+// everything this artifact did and more (scanner, shadow book, scoreboard).
+// Kept for reference only. For couch/phone use: python quant.py --host 0.0.0.0
 import { useState, useEffect, useCallback } from "react";
 import { RefreshCw, Compass, Settings2, Trash2 } from "lucide-react";
 import { LineChart, Line, YAxis, ResponsiveContainer } from "recharts";
