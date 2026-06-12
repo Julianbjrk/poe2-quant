@@ -93,6 +93,12 @@ def main(argv=None):
         from .backtest import run
         run(config.load())
         return
+    if "--bootstrap" in argv:
+        from .bootstrap import run as boot_run
+        i = argv.index("--bootstrap")
+        top = int(argv[i + 1]) if len(argv) > i + 1 and argv[i + 1].isdigit() else 150
+        boot_run(config.load(), top_n=top)
+        return
     host = "127.0.0.1"
     if "--host" in argv:
         host = argv[argv.index("--host") + 1]

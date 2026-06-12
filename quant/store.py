@@ -242,6 +242,20 @@ def daily_rows(c, item, limit=14):
         "SELECT avg_ex FROM daily WHERE item=? ORDER BY date DESC LIMIT ?", (item, limit))]
 
 
+def daily_upsert(c, item, date, avg, vol):
+    c.execute("INSERT OR REPLACE INTO daily VALUES(?,?,?,?)",
+              (item, date, float(avg), float(vol or 0)))
+
+
+def daily_all(c):
+    """item -> [(date, avg_ex, vol)] oldest first, whole table (it's small)."""
+    out = {}
+    for item, date, avg, vol in c.execute(
+            "SELECT item, date, avg_ex, vol FROM daily ORDER BY item, date"):
+        out.setdefault(item, []).append((date, avg, vol))
+    return out
+
+
 def prune(c, tick_days, snap_days):
     c.execute("DELETE FROM ticks WHERE ts < datetime('now', ?)", (f"-{int(tick_days)} days",))
     c.execute("DELETE FROM snapshots WHERE ts < datetime('now', ?)", (f"-{int(snap_days)} days",))

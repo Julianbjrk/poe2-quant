@@ -155,6 +155,24 @@ class TestEngine(unittest.TestCase):
         self.assertFalse([c_ for c_ in snap["cards"]
                           if c_["act"] == "DIP" and c_["item"] == "Test Orb"])
 
+    def test_league_history_makes_day_zero_card(self):
+        # seed the daily table the way --bootstrap would, then dip on poll #1:
+        # no intraday history exists, yet the league anchor carries the signal
+        c = store.connect(self.db)
+        for i in range(20):
+            d = f"2026-05-{i + 1:02d}"
+            store.daily_upsert(c, "Test Orb", d, 100.0 + (0.4 if i % 2 else -0.4), 5000)
+            for nm, px in STABLE.items():
+                store.daily_upsert(c, nm, d, px, 3000)
+        c.commit()
+        c.close()
+        self.io.test_px = 88.0
+        snap = self.run_poll()
+        dips = [c_ for c_ in snap["cards"] if c_["act"] == "DIP"]
+        self.assertEqual(len(dips), 1, f"{snap['cards']} / {snap['no_trade']}")
+        self.assertIn("league-history", dips[0]["why"])
+        self.assertIn("set", dips[0]["head"])
+
     def test_unfilled_entry_expires_and_grades_fill_forecast(self):
         snap = self.play_script(dip_script())
         self.assertTrue([c for c in snap["cards"] if c["act"] == "DIP"])

@@ -162,12 +162,13 @@ def touch_median_h(dist_log, sig_h):
 
 
 # ------------------------------------------------------ ratio quantizer ----
-def best_ratio(price_ex, side, max_lot=20, tol_pct=4.0):
+def best_ratio(price_ex, side, max_lot=20, tol_pct=4.0, good_pct=0.5):
     """Nearest in-game ratio that does not cross the limit.
     buy : offer G exalted for N items, unit G/N ≤ price (your ceiling)
     sell: list N items for E exalted, unit E/N ≥ price (your floor)
-    Returns {"give","get","unit","err_pct","lot"} or None when the item is too
-    cheap/awkward to represent within tol — the principled lot-size guard."""
+    Picks the SMALLEST lot whose rounding cost is ≤ good_pct — a tighter ratio
+    is not worth a lot too chunky to fill or afford. Returns None when the
+    item can't be expressed within tol — the principled lot-size guard."""
     if price_ex <= 0:
         return None
     best = None
@@ -187,7 +188,7 @@ def best_ratio(price_ex, side, max_lot=20, tol_pct=4.0):
         if best is None or err < best["err_pct"] - 1e-9:
             best = {"give": g if side == "buy" else n, "get": n if side == "buy" else g,
                     "unit": unit, "err_pct": err, "lot": n}
-        if err < 0.05:
+        if err <= good_pct:
             break
     if best is None or best["err_pct"] > tol_pct:
         return None
@@ -214,6 +215,17 @@ def median(xs):
         return 0.0
     m = len(s) // 2
     return s[m] if len(s) % 2 else 0.5 * (s[m - 1] + s[m])
+
+
+def daily_anchor(prices):
+    """Robust (median, MAD-sd) of log price for a window of DAILY averages —
+    the league-history anchor used before intraday models have data."""
+    xs = [math.log(p) for p in prices if p and p > 0]
+    if len(xs) < 5:
+        return None
+    med = median(xs)
+    mad = median([abs(x - med) for x in xs])
+    return med, max(1.4826 * mad, 0.01)
 
 
 def weighted_median(pairs):

@@ -10,8 +10,9 @@ import math
 import threading
 
 from . import MODEL_V, store
-from .models import (best_ratio, fee_pct, fit_ou, kf_drift_z, kf_level, kf_new,
-                     kf_sd, kf_sig_h, kf_step, median, weighted_median)
+from .models import (best_ratio, daily_anchor, fee_pct, fit_ou, kf_drift_z,
+                     kf_level, kf_new, kf_sd, kf_sig_h, kf_step, median,
+                     weighted_median)
 from .score import (beta_mean, beta_sd, calib_apply, calib_default, graduation,
                     summarize, today, trust_line, update_gates)
 from .util import (best_match, clamp, fmt_dur_h, fmt_ex, fmt_money, fmt_p,
@@ -67,7 +68,10 @@ def size_card(p, calib, adv, preset, bankroll_ex, deployable_ex, family_spent, r
     vol_cap = (p["vol_div"] or 0) * (rate or 0) * adv["max_pos_pct_volume"] / 100
     fam_cap = max(bankroll_ex * 0.4 - family_spent.get(p["family"], 0.0), 0)
     spend_cap = min(f * bankroll_ex, vol_cap, deployable_ex, fam_cap)
-    ratio = best_ratio(p["entry_px"], "buy")
+    affordable = int(spend_cap // p["entry_px"])
+    if affordable < 1:
+        return None, "size after the caps is below one unit"
+    ratio = best_ratio(p["entry_px"], "buy", max_lot=min(20, affordable))
     if not ratio:
         return None, "too cheap to express as a clean exchange ratio — tick size eats the edge"
     lot = ratio["get"]
@@ -209,6 +213,39 @@ def shadow_process(c, shadow, ts, adv, calib):
     shadow["pos"] = keep_p
 
 
+# ------------------------------------------------- league-history feed -----
+def _daily_backfill(c, io, league, names, budget=8):
+    """Keep the daily table fresh for candidates/held items (≤budget requests
+    per poll, once per item per day). --bootstrap does the bulk version."""
+    if not hasattr(io, "items_index"):
+        return
+    idx = store.kv_json(c, "scout_idx", {})
+    if not idx.get("map") or hours_between(idx.get("ts", "1970-01-01T00:00:00+00:00"),
+                                           now_iso()) > 6:
+        idx = {"ts": now_iso(), "map": {i["Text"]: i["ItemId"] for i in io.items_index(league)
+                                        if i.get("Text") and i.get("ItemId")}}
+        store.kv_set_json(c, "scout_idx", idx)
+    fetched = 0
+    for nm in dict.fromkeys(names):
+        if store.kv_get(c, "daily:" + nm) == today():
+            continue
+        store.kv_set(c, "daily:" + nm, today())
+        iid = idx["map"].get(nm)
+        if not iid:
+            continue
+        try:
+            d = io.daily_stats(league, iid)
+        except Exception:
+            continue
+        for ds in d.get("DailyStats") or []:
+            if ds.get("Time") and ds.get("Average") is not None:
+                store.daily_upsert(c, nm, ds["Time"][:10], ds["Average"], ds.get("Volume"))
+        fetched += 1
+        if fetched >= budget:
+            break
+        io.sleep(0.25)
+
+
 # ----------------------------------------------------------------- poll ----
 def poll(cfg, io, db_path=None, store_snap=True):
     with _poll_lock:
@@ -297,26 +334,39 @@ def _poll(cfg, io, db_path, store_snap):
         "WHERE source='ninja' AND ts >= datetime('now','-1 day') GROUP BY item")}
 
     # ---- market rows + factor structure ---------------------------------
+    # league-history anchor (daily table): live from poll #1 after --bootstrap
+    d14_map = {}
+    for nm, drows in store.daily_all(c).items():
+        if len(drows) >= 10:
+            anch = daily_anchor([a for _, a, _ in drows[-14:]])
+            if anch:
+                d14_map[nm] = {"theta": anch[0], "sd_st": anch[1],
+                               "n": min(len(drows), 14)}
     rows = {}
     for nm, p in px.items():
         st = filters.get(nm)
         ou = ou_map.get(nm)
+        d14 = d14_map.get(nm)
         mm = m24.get(nm)
-        anchor = ou["theta"] if ou else (math.log(mm[0]) if mm and mm[0] > 0 else math.log(p))
+        anchor = (ou["theta"] if ou else d14["theta"] if d14
+                  else math.log(mm[0]) if mm and mm[0] > 0 else math.log(p))
         rows[nm] = {"item": nm, "family": fam[nm], "px": p, "vol_div": vol[nm],
                     "lvl": kf_level(st), "lvl_ex": math.exp(kf_level(st)),
                     "sd": kf_sd(st), "drift_z": kf_drift_z(st), "sig_h": kf_sig_h(st),
-                    "ou": ou, "m24": mm[0] if mm else None, "sd24": mm[1] if mm else None,
-                    "n24": mm[2] if mm else 0, "dev": kf_level(st) - anchor}
+                    "ou": ou, "d14": d14, "m24": mm[0] if mm else None,
+                    "sd24": mm[1] if mm else None, "n24": mm[2] if mm else 0,
+                    "dev": kf_level(st) - anchor}
     devs = [(r["dev"], r["vol_div"]) for r in rows.values() if r["item"] not in MAJORS]
     mkt_dev = weighted_median(devs) if devs else 0.0
-    sd_typ = median([r["ou"]["sd_st"] for r in rows.values() if r["ou"]]) or 0.02
+    sd_typ = (median([r["ou"]["sd_st"] for r in rows.values() if r["ou"]]
+                     or [r["d14"]["sd_st"] for r in rows.values() if r["d14"]]) or 0.02)
     fam_dev = {}
     for f in set(fam.values()):
         fd = [r["dev"] for r in rows.values() if r["family"] == f and r["item"] not in MAJORS]
         fam_dev[f] = median(fd) if fd else 0.0
     for r in rows.values():
-        own_sd = r["ou"]["sd_st"] if r["ou"] else max(r["sig_h"] * 5, 0.02)
+        own_sd = (r["ou"]["sd_st"] if r["ou"] else r["d14"]["sd_st"] if r["d14"]
+                  else max(r["sig_h"] * 5, 0.02))
         r["idio_z"] = (r["dev"] - fam_dev.get(r["family"], 0.0)) / own_sd
         r["fam_z"] = fam_dev.get(r["family"], 0.0) / sd_typ
     market_z = mkt_dev / sd_typ
@@ -398,6 +448,11 @@ def _poll(cfg, io, db_path, store_snap):
     for item, st in pos_now.items():
         f = fam.get(item, "?")
         family_spent[f] = family_spent.get(f, 0.0) + st["cost_ex"]
+    if store_snap:
+        try:
+            _daily_backfill(c, io, league, [p["item"] for p in props[:10]] + list(pos_now))
+        except Exception as e:
+            errors.append(f"daily history: {e}")
 
     kept, miss = [], None
     by_key = {(p["sig"], p["item"]): p for p in props}

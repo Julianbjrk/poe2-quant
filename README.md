@@ -7,10 +7,26 @@ not). Python 3.10+, **stdlib only, zero pip installs, zero required configuratio
 ```
 python quant.py            # serves http://localhost:8377 — that's the whole setup
 python quant.py --doctor   # API + database + model health check (run this first)
+python quant.py --bootstrap  # pre-train from league history (do this second, ~1 min)
 python quant.py --once     # one dry-run poll, printed as JSON
 python quant.py --backtest # walk-forward replay of your own tick history
 python quant.py --host 0.0.0.0   # LAN mode for a phone (token printed at startup)
 ```
+
+## Bootstrap: don't wait two weeks to be calibrated
+`--bootstrap` pulls the league's **daily history since league start** (poe2scout
+DailyStatsHistory, top ~150 items by volume, one polite request each), then re-runs the DIP logic
+over that history walk-forward — same anchor, same idio-vs-market gate, same knife guard, same
+exit quantile — and **measures** how often such dips actually recovered and how much of the gap
+they closed. Those measurements replace the guessed priors (capped at ~30 pseudo-observations so
+live graded outcomes keep the final say, and never applied over existing live evidence), and the
+fetched history gives every item a league anchor so DIP is active and calibrated **from poll #1**
+instead of after a day of tick collection. The engine also tops up daily history for candidates
+automatically each poll.
+
+What the bootstrap honestly cannot do: daily listing medians carry no intraday path, so it can't
+prove your limit orders would have filled. That's the part the shadow book and the 2-week paper
+graduation validate forward — bootstrap shortens the *calibration* ramp, not the *trust* bar.
 
 ## The whole app is one question
 The page is a single column: a header strip (net worth vs the **worst** of three benchmarks,

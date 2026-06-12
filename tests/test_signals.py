@@ -38,6 +38,16 @@ class TestDip(unittest.TestCase):
     def test_no_dip_no_card(self):
         self.assertIsNone(dip(row(px=99.5, idio_z=-0.1), CAL, ADV))
 
+    def test_league_history_fallback_before_intraday(self):
+        r = row()
+        r["ou"] = None
+        r["d14"] = {"theta": math.log(100), "sd_st": 0.015, "n": 14}
+        p = dip(r, CAL, ADV)
+        self.assertIsNotNone(p)
+        self.assertIn("league-history", p["why"])
+        self.assertEqual(p["H_h"], 72.0)
+        self.assertLess(p["target_px"], 100.0)
+
 
 class TestMake(unittest.TestCase):
     def test_deep_book_quotes_around_latent(self):

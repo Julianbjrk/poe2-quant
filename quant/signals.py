@@ -56,6 +56,30 @@ def dip(row, calib, adv):
                "theta_ex": round(math.exp(ou["theta"]), 4), "sd_st_pct": round(ou["sd_st"] * 100, 2),
                "rev_frac": round(rev, 2), "kappa_h": round(kappa, 3), "fees_pct": round(fees, 2)}
         gap_pct = (math.exp(ou["theta"]) / entry - 1) * 100
+    elif row.get("d14") and row["d14"]["n"] >= 10:
+        # league-history anchor: live before intraday models warm up, and its
+        # hit prior is MEASURED by --bootstrap's walk over the same history
+        d = row["d14"]
+        z = (row["lvl"] - d["theta"]) / d["sd_st"]
+        if z > -adv["dip_z"] or row["idio_z"] > -adv["idio_z"]:
+            return None
+        if row["drift_z"] <= adv["knife_drift_z"] or row["fam_z"] <= adv["family_z_floor"]:
+            return None
+        entry = math.exp(row["lvl"] - 0.02 * d["sd_st"])
+        t_ln = d["theta"] - 0.385 * d["sd_st"]   # same quantile the bootstrap graded
+        target = math.exp(t_ln)
+        if target <= entry * 1.005:
+            return None
+        p_hit = clamp(beta_mean(calib["DIP"]["hit"]), 0.35, 0.75)
+        H = 72.0
+        gain = (target / entry - 1) * 100 - fees
+        loss = max(d["sd_st"] * 80, 1.0) + fees / 2
+        dist = 0.02 * d["sd_st"]
+        why = (f"{fmt_pct((1 - entry / math.exp(d['theta'])) * 100)} under its league-history "
+               f"norm ({d['n']} days) — intraday model still warming up")
+        det = {"z_daily": round(z, 2), "idio_z": round(row["idio_z"], 2),
+               "days": d["n"], "fees_pct": round(fees, 2)}
+        gap_pct = (math.exp(d["theta"]) / entry - 1) * 100
     elif row.get("n24", 0) >= 6 and row.get("sd24"):
         z24 = (row["px"] - row["m24"]) / row["sd24"]
         if z24 > -2.2 or row["idio_z"] > -adv["idio_z"] or row["drift_z"] <= adv["knife_drift_z"]:
