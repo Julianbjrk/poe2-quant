@@ -34,10 +34,18 @@ graduation validate forward — bootstrap shortens the *calibration* ramp, not t
 
 ## Staying current
 QUANT checks its GitHub branch for a newer `VERSION` on startup and a few times a day. When one
-exists, a banner offers **update & restart** — it downloads the branch, byte-compiles it before
-trusting it, backs up the old code, swaps it in (your `config*.json` and `quant.db` are never
-touched), and restarts into the new version. Set `auto_update: true` in config.json to apply on
-startup without asking, or `update_branch` to track a different branch.
+exists, a banner offers **update & restart** — it downloads the branch via the GitHub API,
+byte-compiles it before trusting it, backs up the old code, swaps it in (your `config*.json` and
+`quant.db` are never touched), and restarts into the new version. Set `auto_update: true` in
+config.json to apply on startup without asking, or `update_branch` to track a different branch.
+
+**Private repo?** Then the updater needs a read-only token (a public repo needs none). Create a
+fine-grained Personal Access Token on GitHub scoped to **Contents: Read-only** on just this repo,
+then make it visible to QUANT one of two ways:
+- environment: `export QUANT_GH_TOKEN=github_pat_…` (e.g. in the systemd unit or your shell), or
+- config: add `"github_token": "github_pat_…"` to `config.advanced.json`.
+
+The token is sent only to `api.github.com` for this one repo, never logged, never committed.
 
 ## Recording trades — price is *per unit*
 When you log or take a fill, **price is per unit, in exalted** — the same "X ex each" the card

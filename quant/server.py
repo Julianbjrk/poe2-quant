@@ -50,7 +50,7 @@ def make_handler(io, token):
             if path == "/api/update":  # force a fresh check
                 from . import update
                 cfg = config.load()
-                res = update.check(cfg["update_branch"])
+                res = update.check(cfg["update_branch"], token=update.token_from(cfg))
                 c = store.connect(config.DB_PATH)
                 store.kv_set_json(c, "update_status", {**res, "ts": now_iso()})
                 c.commit()
@@ -128,7 +128,7 @@ def make_handler(io, token):
                     out = {"ok": True, "fill": eid, "voided": old["id"]}
                 elif path == "/api/update_apply":
                     from . import update
-                    res = update.apply(cfg["update_branch"])
+                    res = update.apply(cfg["update_branch"], token=update.token_from(cfg))
                     if res.get("ok"):
                         threading.Timer(0.8, update.restart).start()
                     return self._send(200, json.dumps(res))

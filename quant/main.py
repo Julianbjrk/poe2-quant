@@ -37,7 +37,7 @@ def poller_loop(io):
 
 def refresh_update_status(cfg):
     from . import update
-    res = update.check(cfg["update_branch"])
+    res = update.check(cfg["update_branch"], token=update.token_from(cfg))
     c = store.connect(config.DB_PATH)
     store.kv_set_json(c, "update_status", {**res, "ts": time.strftime("%Y-%m-%dT%H:%M:%S")})
     c.commit()
@@ -135,11 +135,13 @@ def main(argv=None):
     if "--update" in argv:
         from . import update
         cfg = config.load()
-        res = update.check(cfg["update_branch"])
+        tok = update.token_from(cfg)
+        res = update.check(cfg["update_branch"], token=tok)
         print(f"current {res['current']} · latest {res.get('latest')} · "
-              + ("update available" if res.get("available") else "up to date"))
+              + ("update available" if res.get("available")
+                 else res.get("err") or "up to date"))
         if res.get("available"):
-            r = update.apply(cfg["update_branch"])
+            r = update.apply(cfg["update_branch"], token=tok)
             print("updated to", r.get("version")) if r.get("ok") else print("update failed:", r.get("err"))
         return
     host = "127.0.0.1"
@@ -158,7 +160,7 @@ def main(argv=None):
             if res.get("available") and cfg.get("auto_update"):
                 from . import update
                 print(f"auto-update: installing {res['latest']}…")
-                if update.apply(cfg["update_branch"]).get("ok"):
+                if update.apply(cfg["update_branch"], token=update.token_from(cfg)).get("ok"):
                     print("auto-update: restarting into the new version…")
                     update.restart()
         except Exception as e:

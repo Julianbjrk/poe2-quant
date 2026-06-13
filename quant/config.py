@@ -74,6 +74,7 @@ ADVANCED_DEFAULTS = {
     "grad_t_min": 1.64,             # …and t-stat of daily alpha vs worst benchmark
     "tick_keep_days": 14,
     "snap_keep_days": 60,
+    "github_token": "",             # only needed to self-update a PRIVATE repo (read-only PAT)
     "recipes": DEFAULT_RECIPES,
     "scan_types": ["Currency", "Fragments", "Essences", "Runes", "SoulCores",
                    "LineageSupportGems", "Expedition", "Ritual", "Abyss",
