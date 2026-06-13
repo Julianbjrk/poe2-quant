@@ -102,6 +102,66 @@ class TestTicks(StoreCase):
         self.assertEqual(len(series["X"]), 1)
 
 
+class TestArchive(StoreCase):
+    def test_prune_archives_old_ticks_then_deletes_keeps_recent(self):
+        c = store.connect(self.path)
+        cache = {}
+        new_ts = store.now_iso()
+        store.insert_ticks(c, "2020-01-15T10:00:00+00:00", [("X", "ninja", 10.0, 100)], cache)
+        store.insert_ticks(c, new_ts, [("X", "ninja", 11.0, 100)], cache)
+        c.commit()
+        arch = Path(self.tmp.name) / "data_archive"
+        store.prune(c, tick_days=14, snap_days=60, archive_dir=str(arch))
+        c.commit()
+        # the old tick is gone from the DB but preserved in a monthly CSV; recent stays
+        self.assertEqual([r[0] for r in c.execute("SELECT ts FROM ticks")], [new_ts])
+        f = arch / "ticks-2020-01.csv"
+        self.assertTrue(f.exists())
+        lines = f.read_text().strip().splitlines()
+        self.assertEqual(lines[0], "ts,item,source,price_ex,vol_div")
+        self.assertIn("2020-01-15T10:00:00+00:00,X,ninja,10.0,100", lines[1])
+
+    def test_archive_appends_across_prunes(self):
+        c = store.connect(self.path)
+        cache = {}
+        store.insert_ticks(c, "2020-01-15T10:00:00+00:00", [("X", "ninja", 10.0, 100)], cache)
+        c.commit()
+        arch = str(Path(self.tmp.name) / "data_archive")
+        store.prune(c, 14, 60, archive_dir=arch)
+        store.insert_ticks(c, "2020-01-20T10:00:00+00:00", [("X", "ninja", 12.0, 100)], cache)
+        c.commit()
+        store.prune(c, 14, 60, archive_dir=arch)
+        lines = (Path(arch) / "ticks-2020-01.csv").read_text().strip().splitlines()
+        self.assertEqual(len(lines), 3)  # header + two appended ticks, no dup header
+
+    def test_archive_failure_keeps_ticks(self):
+        c = store.connect(self.path)
+        cache = {}
+        store.insert_ticks(c, "2020-01-15T10:00:00+00:00", [("X", "ninja", 10.0, 100)], cache)
+        c.commit()
+        blocker = Path(self.tmp.name) / "afile"
+        blocker.write_text("not a dir")
+        store.prune(c, 14, 60, archive_dir=str(blocker / "sub"))  # mkdir under a file -> fails
+        c.commit()
+        self.assertEqual(c.execute("SELECT COUNT(*) FROM ticks").fetchone()[0], 1)  # not lost
+
+    def test_export_bundle(self):
+        c = store.connect(self.path)
+        cache = {}
+        store.insert_ticks(c, store.now_iso(), [("X", "ninja", 10.0, 100)], cache)
+        store.predict_write(c, "p1", "c1", "DIP", "X", {"p_hit": 0.6, "feat": {"z": -2}})
+        store.predict_grade(c, "p1", {"filled": 1, "hit": 1, "realized_pct": 4.0})
+        c.commit()
+        out = Path(self.tmp.name) / "exp"
+        res = store.export_all(c, str(out))
+        self.assertEqual(res["predictions"], 1)
+        for name in ("predictions.jsonl", "bars.csv", "ticks_live.csv"):
+            self.assertTrue((out / name).exists(), name)
+        rec = json.loads((out / "predictions.jsonl").read_text().strip())
+        self.assertEqual(rec["outcome"]["hit"], 1)
+        self.assertEqual(rec["forecast"]["p_hit"], 0.6)
+
+
 class TestMigration(StoreCase):
     def test_v04_db_is_imported(self):
         c = sqlite3.connect(self.path)

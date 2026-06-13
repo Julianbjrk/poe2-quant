@@ -14,8 +14,10 @@ Tables:
   snapshots    UI state history (net-worth curves, debrief), pruned
   kv           machine state blobs (filters, calibration, shadow book, baselines)
 """
+import csv
 import json
 import sqlite3
+from pathlib import Path
 
 from .util import now_iso
 
@@ -264,9 +266,75 @@ def daily_all(c):
     return out
 
 
-def prune(c, tick_days, snap_days):
-    c.execute("DELETE FROM ticks WHERE ts < datetime('now', ?)", (f"-{int(tick_days)} days",))
+def archive_ticks(archive_dir, rows):
+    """Append rows (ts,item,source,price_ex,vol_div) to monthly CSV files so the
+    full 5-minute resolution is preserved forever, even though the DB only keeps
+    a rolling window. Append-only; never rewrites. Raises on I/O failure so the
+    caller can keep the rows in the DB and retry rather than lose them."""
+    d = Path(archive_dir)
+    d.mkdir(parents=True, exist_ok=True)
+    by_month = {}
+    for r in rows:
+        by_month.setdefault((r[0] or "0000-00")[:7], []).append(r)
+    for month, rs in by_month.items():
+        f = d / f"ticks-{month}.csv"
+        new = not f.exists()
+        with open(f, "a", encoding="utf-8", newline="") as fh:
+            w = csv.writer(fh)
+            if new:
+                w.writerow(["ts", "item", "source", "price_ex", "vol_div"])
+            w.writerows(rs)
+
+
+def prune(c, tick_days, snap_days, archive_dir=None):
+    cut = f"-{int(tick_days)} days"
+    archived_ok = True
+    if archive_dir:
+        rows = c.execute("SELECT ts,item,source,price_ex,vol_div FROM ticks "
+                         "WHERE ts < datetime('now', ?)", (cut,)).fetchall()
+        if rows:
+            try:
+                archive_ticks(archive_dir, rows)
+            except Exception:
+                archived_ok = False  # keep the ticks, retry next prune — never lose them
+    if archived_ok:
+        c.execute("DELETE FROM ticks WHERE ts < datetime('now', ?)", (cut,))
     c.execute("DELETE FROM snapshots WHERE ts < datetime('now', ?)", (f"-{int(snap_days)} days",))
+
+
+def export_all(c, out_dir, archive_dir=None):
+    """Portable research dump: the labeled forecast ledger (predictions.jsonl),
+    the permanent hourly price history (bars.csv), and the live 5-minute ticks
+    (ticks_live.csv). The pruned-out high-res ticks live in archive_dir already.
+    Returns a summary dict."""
+    d = Path(out_dir)
+    d.mkdir(parents=True, exist_ok=True)
+    n_pred = 0
+    with open(d / "predictions.jsonl", "w", encoding="utf-8") as fh:
+        for pid, ts, cid, sig, item, payload, outcome, gts in c.execute(
+                "SELECT id,ts,card_id,sig,item,payload,outcome,graded_ts FROM predictions ORDER BY ts"):
+            fh.write(json.dumps({"id": pid, "ts": ts, "card_id": cid, "sig": sig,
+                                 "item": item, "forecast": json.loads(payload),
+                                 "outcome": json.loads(outcome) if outcome else None,
+                                 "graded_ts": gts}) + "\n")
+            n_pred += 1
+    n_bars = 0
+    with open(d / "bars.csv", "w", encoding="utf-8", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["item", "source", "hour", "open", "high", "low", "close", "n", "vol"])
+        for row in c.execute("SELECT item,source,hour,open,high,low,close,n,vol FROM bars ORDER BY item,hour"):
+            w.writerow(row)
+            n_bars += 1
+    n_ticks = 0
+    with open(d / "ticks_live.csv", "w", encoding="utf-8", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["ts", "item", "source", "price_ex", "vol_div"])
+        for row in c.execute("SELECT ts,item,source,price_ex,vol_div FROM ticks ORDER BY ts"):
+            w.writerow(row)
+            n_ticks += 1
+    n_arch = len(list(Path(archive_dir).glob("ticks-*.csv"))) if archive_dir and Path(archive_dir).exists() else 0
+    return {"dir": str(d), "predictions": n_pred, "bars": n_bars,
+            "ticks_live": n_ticks, "archive_files": n_arch}
 
 
 # -------------------------------------------------------- predictions ------

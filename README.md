@@ -126,6 +126,23 @@ the UI. Everything else — gates, horizons, priors, fee curve, recipes, poll ca
 **Migrating from v0.4** is automatic: old `config.json` is folded in (backup written next to it),
 old fills/ticks/holdings import into the event ledger on first run.
 
+## Your data is preserved for later analysis
+QUANT keeps the DB small by holding only a rolling ~14-day window of 5-minute ticks — but it does
+**not throw the older ones away**: just before pruning, it appends them to monthly CSV files under
+`data_archive/` (kept forever, append-only). The permanent hourly bars, the full forecast ledger
+(every prediction + its graded outcome), and the whole decision log stay in the DB indefinitely.
+So even if the tool turns out not to be worth running, you're left with a complete, replayable,
+*unbiased* record — what the market did, what was predicted, and what actually happened — which is
+exactly what a future/better algorithm needs (replay it with `--backtest`). Set
+`archive_ticks: false` in `config.advanced.json` to opt out.
+
+`python quant.py --export [dir]` writes a portable research bundle (default `quant_export/`):
+`predictions.jsonl` (the labeled forecast→outcome dataset), `bars.csv` (permanent hourly history),
+and `ticks_live.csv` (the current high-res window; the rest is already in `data_archive/`). Both
+`data_archive/` and `quant_export/` are gitignored — it's your private history. The one thing the
+tool can't protect against is you deleting `quant.db` and `data_archive/`, so back those up if the
+long-term record matters to you.
+
 ## Architecture (for the next reader)
 ```
 quant.py            thin shim — the run command never changes

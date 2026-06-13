@@ -72,7 +72,8 @@ ADVANCED_DEFAULTS = {
     "circuit_z": 2.5,               # market-wide move (in its own sd) that halts entries
     "grad_days_min": 14,            # graduation: days of paper curve required…
     "grad_t_min": 1.64,             # …and t-stat of daily alpha vs worst benchmark
-    "tick_keep_days": 14,
+    "tick_keep_days": 14,           # DB keeps this rolling window of 5-min ticks…
+    "archive_ticks": True,          # …and appends older ones to data_archive/ so nothing is lost
     "snap_keep_days": 60,
     "github_token": "",             # only needed to self-update a PRIVATE repo (read-only PAT)
     "recipes": DEFAULT_RECIPES,

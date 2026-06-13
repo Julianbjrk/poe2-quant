@@ -8,6 +8,7 @@ card lifecycle → shadow book → predictions → exits → benchmarks → snap
 import json
 import math
 import threading
+from pathlib import Path
 
 from . import MODEL_V, store
 from .models import (best_ratio, daily_anchor, fee_pct, fit_ou, kf_drift_z,
@@ -635,7 +636,8 @@ def _poll(cfg, io, db_path, store_snap):
         store.kv_set_json(c, "last_snap", snap)
         store.snap_write(c, ts, {"ts": ts, "nw_div": port["nw_div"], "mode": mode,
                                  "ex_per_div": rate, "deltas": deltas})
-        store.prune(c, adv["tick_keep_days"], adv["snap_keep_days"])
+        archive_dir = (Path(path).parent / "data_archive") if adv.get("archive_ticks", True) else None
+        store.prune(c, adv["tick_keep_days"], adv["snap_keep_days"], archive_dir=archive_dir)
     c.commit()
     c.close()
     return snap

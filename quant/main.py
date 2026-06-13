@@ -126,6 +126,18 @@ def main(argv=None):
         from .backtest import run
         run(config.load())
         return
+    if "--export" in argv:
+        i = argv.index("--export")
+        out = argv[i + 1] if len(argv) > i + 1 and not argv[i + 1].startswith("-") else "quant_export"
+        c = store.connect(config.DB_PATH)
+        archive = config.DB_PATH.parent / "data_archive"
+        res = store.export_all(c, out, archive_dir=archive)
+        c.close()
+        print(f"Exported to {res['dir']}/ — {res['predictions']} forecasts, "
+              f"{res['bars']} hourly bars, {res['ticks_live']} live ticks. "
+              f"Full-resolution tick archive: {res['archive_files']} monthly file(s) in "
+              f"{archive}/ (kept forever).")
+        return
     if "--bootstrap" in argv:
         from .bootstrap import run as boot_run
         i = argv.index("--bootstrap")
