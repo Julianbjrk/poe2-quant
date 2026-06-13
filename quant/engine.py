@@ -634,6 +634,12 @@ def _poll(cfg, io, db_path, store_snap):
     })
     if store_snap:
         store.kv_set_json(c, "last_snap", snap)
+        # canonical item names for the trade-form autocomplete + server-side
+        # snapping: everything the scanner prices, plus anything you hold/traded
+        fill_items = {f["item"] for f in store.fills(c, "paper") + store.fills(c, "real")}
+        names = sorted(set(px) | set(pos_now) | fill_items
+                       | {p["item"] for p in pins_view if p.get("item")})
+        store.kv_set_json(c, "item_names", names)
         store.snap_write(c, ts, {"ts": ts, "nw_div": port["nw_div"], "mode": mode,
                                  "ex_per_div": rate, "deltas": deltas})
         archive_dir = (Path(path).parent / "data_archive") if adv.get("archive_ticks", True) else None

@@ -5,6 +5,27 @@ import unittest
 from quant.models import (best_ratio, fee_pct, fit_ou, kf_drift_z, kf_level,
                           kf_new, kf_step, ou_horizon, prob_ge, touch_median_h,
                           touch_prob, weighted_median)
+from quant.util import snap_name
+
+
+class TestSnapName(unittest.TestCase):
+    NAMES = ["Uul-Netol's Catalyst", "Greater Essence of Haste", "Divine Orb"]
+
+    def test_snaps_curly_apostrophe_to_canonical(self):
+        # the copy/paste failure mode: straight ' vs the game's curly ’
+        self.assertEqual(snap_name("Uul-Netol’s Catalyst", self.NAMES),
+                         "Uul-Netol's Catalyst")
+
+    def test_snaps_case_and_whitespace(self):
+        self.assertEqual(snap_name("  divine   orb ", self.NAMES), "Divine Orb")
+
+    def test_leaves_unknown_items_untouched(self):
+        self.assertEqual(snap_name("Some Catalyst Not Scanned", self.NAMES),
+                         "Some Catalyst Not Scanned")
+
+    def test_does_not_merge_distinct_items(self):
+        # a partial/substring is NOT snapped (would merge distinct items)
+        self.assertEqual(snap_name("Essence", self.NAMES), "Essence")
 
 
 class TestRatio(unittest.TestCase):

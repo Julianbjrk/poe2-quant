@@ -83,6 +83,23 @@ def best_match(query, names):
     return best_nm
 
 
+def snap_name(typed, names):
+    """Bind a typed/pasted item name to the canonical one in `names`.
+
+    Conservative: only snaps when the typed name is the SAME item up to
+    apostrophe style (’ vs '), case, and whitespace — which is exactly the
+    copy/paste failure mode (the game uses a curly apostrophe). A genuinely
+    different/unknown item (e.g. an unscanned catalyst) is left untouched, so
+    distinct items never get merged."""
+    if not typed:
+        return typed
+    qn = norm_name(typed)
+    for nm in names or []:
+        if norm_name(nm) == qn:
+            return nm
+    return typed
+
+
 # -------------------------------------------------------- language lint ----
 def fmt_ex(v):
     if v is None:

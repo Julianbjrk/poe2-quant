@@ -71,10 +71,12 @@ svg{display:block;width:100%;height:60px;margin-top:8px}
 <section><h2>Trades</h2><table id="trades"><thead><tr><th>when</th><th>item</th><th>side</th>
 <th>qty</th><th>ex / unit</th><th></th><th></th></tr></thead><tbody></tbody></table>
 <div class="grid" id="fillform" style="margin-top:10px">
-<input id="f_item" placeholder="item"><select id="f_side"><option>buy</option><option>sell</option></select>
+<input id="f_item" placeholder="start typing — pick the exact item" list="namelist" autocomplete="off"><datalist id="namelist"></datalist>
+<select id="f_side"><option>buy</option><option>sell</option></select>
 <input id="f_qty" placeholder="qty" inputmode="decimal"><input id="f_px" placeholder="price PER UNIT (ex)" inputmode="decimal">
 <button class="small" id="f_go">record fill</button><button class="small" id="f_cancel" hidden>cancel edit</button></div>
-<p class="k" id="f_hint" style="margin:8px 0 0">Price is <b>per unit</b>, in exalted — the same "ex each" number the card shows, not the order total. Click <b>edit</b> on any trade to fix one; everything recalculates.</p></section>
+<p class="k" id="f_hint" style="margin:8px 0 0">Price is <b>per unit</b>, in exalted — the same "ex each" number the card shows, not the order total. Click <b>edit</b> on any trade to fix one; everything recalculates.</p>
+<p class="k" id="f_match" style="margin:4px 0 0"></p></section>
 <section><h2>Capital — what you hold right now (liquid, not positions)</h2>
 <div class="grid"><input id="c_div" placeholder="divine" inputmode="decimal">
 <input id="c_ex" placeholder="exalted" inputmode="decimal">
@@ -198,11 +200,16 @@ const det=(o.head||o.plan||o.why)
    +(o.sig?` · signal ${esc(o.sig)}`:"")+(o.ts?` · placed ${esc(o.ts.slice(5,16).replace("T"," "))}`:"");
 return `<tr><td>${esc(o.item)}</td><td>${o.side} ${o.qty} @ ${o.px} ex</td><td>${tgt}</td>
 <td><a data-od="${o.id}">show card ▸</a></td><td><a data-cancel="${o.id}">cancel</a></td></tr>
-<tr id="od${o.id}" hidden><td colspan="5" style="background:rgba(0,0,0,.18)">${det}</td></tr>`}).join("")
+<tr id="od${o.id}" hidden><td colspan="5" style="background:rgba(0,0,0,.18)">${det}
+<div style="margin-top:8px"><button class="small" data-obuy="${o.id}">I bought it</button>
+<button class="small" data-osell="${o.id}">I sold it</button></div></td></tr>`}).join("")
 ||"<tr><td class='k'>none</td></tr>";
 $("#orders").querySelectorAll("[data-od]").forEach(a=>a.onclick=()=>{const r=$("#od"+a.dataset.od);if(r)r.hidden=!r.hidden});
 $("#orders").querySelectorAll("[data-cancel]").forEach(a=>a.onclick=async()=>{
 await api("/api/void",{id:+a.dataset.cancel,kind:"order"});toast("order cancelled");load()});
+$("#orders").querySelectorAll("[data-obuy]").forEach(b=>b.onclick=()=>orderBought(b.dataset.obuy));
+$("#orders").querySelectorAll("[data-osell]").forEach(b=>b.onclick=()=>orderSold(b.dataset.osell));
+$("#namelist").innerHTML=((D.names)||[]).map(n=>`<option value="${esc(n)}"></option>`).join("");
 FILLS={};(D.fills||[]).forEach(f=>FILLS[f.id]=f);
 $("#trades tbody").innerHTML=(D.fills||[]).map(f=>`<tr><td>${esc(f.ts.slice(5,16).replace("T"," "))}</td>
 <td>${esc(f.item)}</td><td>${f.side}</td><td>${f.qty}</td><td>${f.px}</td>
@@ -286,12 +293,31 @@ else{b.disabled=false;b.textContent="update & restart";toast("update failed: "+(
 
 function prefillClose(item,qty){if(EDITING)cancelEdit();
 $("#f_item").value=item;$("#f_side").value="sell";$("#f_qty").value=qty;$("#f_px").value="";
-$("#record").open=true;updateHint();$("#f_item").scrollIntoView({behavior:"smooth",block:"center"});
+$("#record").open=true;updateHint();checkMatch();$("#f_item").scrollIntoView({behavior:"smooth",block:"center"});
 toast("logging the sale of "+item+" — enter the price you sold at (per unit), then record fill");}
+// name matching: mirror the server's snap so the user sees what their entry binds to
+function jnorm(s){return (s||"").replace(/’/g,"'").toLowerCase().split(/\s+/).filter(Boolean).join(" ")}
+function checkMatch(){const v=$("#f_item").value,N=(D&&D.names)||[];
+if(!v){$("#f_match").textContent="";return}
+const hit=N.find(n=>jnorm(n)===jnorm(v));
+$("#f_match").innerHTML=hit?`✓ binds to <b>${esc(hit)}</b> — it'll price and match your other trades`
+:`<span class="k">not a known item yet — saved exactly as typed (fine for things the scanner can't see)</span>`;}
+function orderById(id){return (D.orders||[]).find(o=>String(o.id)===String(id))}
+async function orderBought(id){const o=orderById(id);if(!o)return;
+try{await api("/api/fill",{item:o.item,side:"buy",qty:o.qty,px:o.px,ledger:D.cfg.mode,note:"order "+id+" bought"});
+await api("/api/void",{id:+id,kind:"order"});
+toast("logged the buy of "+o.qty+"× "+o.item+" — it's a holding now; HOLD/SELL cards will track it");load();
+}catch(e){toast("couldn't record: "+e.message)}}
+async function orderSold(id){const o=orderById(id);if(!o)return;
+try{await api("/api/fill",{item:o.item,side:"buy",qty:o.qty,px:o.px,ledger:D.cfg.mode,note:"order "+id+" bought"});
+await api("/api/void",{id:+id,kind:"order"});
+prefillClose(o.item,o.qty);
+toast("logged the buy at "+o.px+" ex — now enter what you sold it for and record");
+}catch(e){toast("couldn't record: "+e.message)}}
 function startEdit(f){EDITING=f;
 $("#f_item").value=f.item;$("#f_side").value=f.side;$("#f_qty").value=f.qty;$("#f_px").value=f.px;
 $("#f_go").textContent="save edit #"+f.id;$("#f_cancel").hidden=false;$("#fillform").classList.add("editing");
-updateHint();$("#record").open=true;$("#f_item").scrollIntoView({behavior:"smooth",block:"center"});
+updateHint();checkMatch();$("#record").open=true;$("#f_item").scrollIntoView({behavior:"smooth",block:"center"});
 toast("editing trade #"+f.id+" — fix the numbers (price is per unit), then save");}
 function cancelEdit(){EDITING=null;$("#f_go").textContent="record fill";$("#f_cancel").hidden=true;
 $("#fillform").classList.remove("editing");$("#f_qty").value=$("#f_px").value="";updateHint();}
@@ -318,7 +344,7 @@ else{await api("/api/fill",body);toast("fill recorded");$("#f_qty").value=$("#f_
 load();
 }catch(e){toast("couldn't save: "+e.message)}};
 $("#f_cancel").onclick=cancelEdit;
-$("#f_qty").oninput=updateHint;$("#f_px").oninput=updateHint;
+$("#f_qty").oninput=updateHint;$("#f_px").oninput=updateHint;$("#f_item").oninput=checkMatch;
 $("#c_go").onclick=async()=>{try{
 await api("/api/holdings",{div:num($("#c_div").value)||0,ex:num($("#c_ex").value)||0,chaos:num($("#c_chaos").value)||0});
 toast("holdings set — sizing and benchmarks now use your real capital");load();

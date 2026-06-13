@@ -7,7 +7,7 @@ from urllib.parse import parse_qs, urlparse
 
 from . import __version__, config, store
 from .engine import poll
-from .util import now_iso
+from .util import now_iso, snap_name
 
 
 def make_handler(io, token):
@@ -73,10 +73,11 @@ def make_handler(io, token):
             c.close()
             c2 = store.connect(config.DB_PATH)
             upd = store.kv_json(c2, "update_status")
+            names = store.kv_json(c2, "item_names") or []
             c2.close()
             return {"cfg": {k: cfg[k] for k in ("league", "mode", "risk", "pins")},
                     "snap": snap, "fills": fills[:40], "orders": orders, "hist": hist,
-                    "update": upd, "version": __version__}
+                    "update": upd, "version": __version__, "names": names}
 
         def do_POST(self):
             if not self._authed():
@@ -106,11 +107,12 @@ def make_handler(io, token):
                         eid = store.append(c, "fill", ev)
                         out = {"ok": True, "fill": eid}
                 elif path == "/api/fill":
+                    item = snap_name(body["item"], store.kv_json(c, "item_names") or [])
                     eid = store.append(c, "fill", {
-                        "ledger": body.get("ledger") or cfg["mode"], "item": body["item"],
+                        "ledger": body.get("ledger") or cfg["mode"], "item": item,
                         "side": body.get("side", "buy"), "qty": float(body["qty"]),
                         "px": float(body["px"]), "note": body.get("note", "manual")})
-                    out = {"ok": True, "fill": eid}
+                    out = {"ok": True, "fill": eid, "item": item}
                 elif path == "/api/fill_edit":
                     # event-sourced edit: void the old fill, append a corrected one.
                     # Nothing is rewritten; positions/benchmarks re-fold automatically.
@@ -120,7 +122,8 @@ def make_handler(io, token):
                     store.append(c, "fill_void", {"void_id": old["id"], "note": "edited"})
                     eid = store.append(c, "fill", {
                         "ledger": body.get("ledger") or old.get("ledger") or cfg["mode"],
-                        "item": body.get("item", old["item"]),
+                        "item": snap_name(body.get("item", old["item"]),
+                                          store.kv_json(c, "item_names") or []),
                         "side": body.get("side", old["side"]),
                         "qty": float(body["qty"]), "px": float(body["px"]),
                         # keep the card linkage + exit target so the position behaves

@@ -47,12 +47,22 @@ then make it visible to QUANT one of two ways:
 
 The token is sent only to `api.github.com` for this one repo, never logged, never committed.
 
-## Recording trades — price is *per unit*
+## Recording trades — price is *per unit*, and the item name binds to the data
 When you log or take a fill, **price is per unit, in exalted** — the same "X ex each" the card
-shows, not the order total. The form previews `qty × price = total` so it's unambiguous. Got one
-wrong? Hit **edit** on any row in the Trades table (under *Record ▸*): it appends a correction
-event (nothing is ever rewritten) and every position, benchmark and net-worth number re-folds
-automatically. The card linkage and exit target are preserved across an edit.
+shows, not the order total. The form previews `qty × price = total` so it's unambiguous. The item
+field has an **autocomplete** drawn from everything the scanner prices (plus what you hold/traded),
+and a live indicator shows whether your entry binds to a known item. Even if you paste a name that
+differs only by the game's curly apostrophe (`’` vs `'`), case, or stray spaces, the server
+**snaps it to the canonical name** — so your buy and sell always offset and the item gets priced.
+Genuinely unknown items (e.g. a catalyst the scanner can't see) are saved exactly as typed, never
+merged into something else. Got one wrong? Hit **edit** on any row in the Trades table (under
+*Record ▸*): it appends a correction event (nothing is ever rewritten) and every position,
+benchmark and net-worth number re-folds automatically.
+
+Resting orders (paper) are actionable: expand one with **show card** to see its plan again, then
+**I bought it** (records the buy, so it becomes a tracked holding) or **I sold it** (records the
+buy and prefills the sale so you just enter your price) — names taken straight from the order, so
+they always match.
 
 ## Why did the cards disappear? — the status line
 Above the cards there's always a one-line status: items scanned, positions held, resting orders,
