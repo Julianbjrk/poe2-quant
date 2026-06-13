@@ -127,6 +127,7 @@ ${nt.checked??"?"} items checked · entries never notify — the next dip always
 +cards.map(c=>cardHTML(c,byCard)).join("");}
 else wrap.innerHTML=cards.map(c=>cardHTML(c,byCard)).join("");
 wrap.querySelectorAll("[data-take]").forEach(b=>b.onclick=()=>take(b));
+wrap.querySelectorAll("[data-close]").forEach(b=>b.onclick=()=>prefillClose(b.dataset.item,b.dataset.qty));
 wrap.querySelectorAll("[data-det]").forEach(a=>a.onclick=()=>{const d=a.nextElementSibling;d.hidden=!d.hidden});
 wrap.querySelectorAll("[data-cancel]").forEach(a=>a.onclick=async()=>{
 await api("/api/void",{id:+a.dataset.cancel,kind:"order"});toast("order cancelled");load()});
@@ -142,7 +143,7 @@ const o=byCard[c.id];const paper=D.cfg.mode==="paper";
 let btn="";
 if(o)btn=`<div class="resting">order resting at ${o.px} ex — fills when the market trades through
 · <a data-cancel="${o.id}">cancel</a></div>`;
-else if(c.act==="HOLD"||c.act==="CHECK")btn="";
+else if(c.act==="HOLD"||c.act==="CHECK")btn=c.closeable?`<button class="small" data-close="1" data-item="${esc(c.item)}" data-qty="${c.qty}">I sold it — log the sale</button>`:"";
 else{const side=(c.act==="SELL"||c.act==="ABANDON")?"sell":"buy";
 const label=paper?(c.act==="ABANDON"?"Sell now (paper)":"Take it (paper)"):"I did it — log the fill";
 btn=`<button data-take="1" data-id="${esc(c.id)}" data-item="${esc(c.item)}" data-side="${side}"
@@ -271,6 +272,10 @@ if(r&&r.ok){toast("installed "+r.version+" — restarting, the page will reconne
 .catch(()=>setTimeout(wait,1500))})();}
 else{b.disabled=false;b.textContent="update & restart";toast("update failed: "+((r&&r.err)||"unknown"))}}
 
+function prefillClose(item,qty){if(EDITING)cancelEdit();
+$("#f_item").value=item;$("#f_side").value="sell";$("#f_qty").value=qty;$("#f_px").value="";
+$("#record").open=true;updateHint();$("#f_item").scrollIntoView({behavior:"smooth",block:"center"});
+toast("logging the sale of "+item+" — enter the price you sold at (per unit), then record fill");}
 function startEdit(f){EDITING=f;
 $("#f_item").value=f.item;$("#f_side").value=f.side;$("#f_qty").value=f.qty;$("#f_px").value=f.px;
 $("#f_go").textContent="save edit #"+f.id;$("#f_cancel").hidden=false;$("#fillform").classList.add("editing");

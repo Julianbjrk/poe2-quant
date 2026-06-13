@@ -125,9 +125,11 @@ def exit_card(item, st, row, adv, rate):
     qty = st["qty"]
     if px is None:
         return {"id": f"EXIT:{item}", "act": "CHECK", "item": item, "qty": qty,
-                "head": f"CHECK {item} — no price this poll",
-                "plan": f"holding {qty:g} at avg {fmt_ex(st['avg'])} ex; verify in-game",
-                "why": "item missing from the scan", "px": None}
+                "head": f"CHECK {item} — not in the scanner",
+                "plan": f"holding {qty:g} at avg {fmt_ex(st['avg'])} ex — the scanner can't price this one",
+                "why": "if you've sold it, log the sale to close this card; "
+                       "if the buy was a mistake, void it under Record ▸",
+                "px": None, "closeable": True}
     gain = (px - st["avg"]) / st["avg"] * 100 if st["avg"] else 0
     sd_pct = (row["ou"]["sd_st"] * 100) if row.get("ou") else 6.0
     target = st.get("target_px") or (
@@ -152,7 +154,7 @@ def exit_card(item, st, row, adv, rate):
                 "why": "cut losers fast — thin-league dumps rarely bounce quickly"}
     done = clamp((px - st["avg"]) / (target - st["avg"]) * 100 if target != st["avg"] else 0, -200, 100)
     return {"id": f"EXIT:{item}", "act": "HOLD", "item": item, "qty": qty, "px": px,
-            "target_px": round(target, 4),
+            "target_px": round(target, 4), "closeable": True,
             "head": f"HOLD {qty:g}× {item} ({fmt_pct(gain, signed=True)}, now {fmt_ex(px)} ex)",
             "plan": f"exit at {fmt_ex(target)} ex — about {fmt_pct(done)} of the way there",
             "why": f"net of fees this needs {fmt_ex(target)} ex; no trigger yet"}

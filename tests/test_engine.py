@@ -99,6 +99,17 @@ class TestEngine(unittest.TestCase):
         self.assertIsNotNone(store.kv_json(c, "last_snap"))
         c.close()
 
+    def test_unscannable_position_makes_a_closeable_check_card(self):
+        # a held item the scanner can't price (e.g. a catalyst) must give the
+        # user a way to close it instead of a permanent dead card
+        from quant.engine import exit_card
+        st = {"qty": 3, "avg": 1.08, "cost_ex": 3.24, "target_px": None, "sig": None}
+        card = exit_card("Uul-Netol's Catalyst", st, None, self.cfg["adv"], 400.0)
+        self.assertEqual(card["act"], "CHECK")
+        self.assertTrue(card["closeable"])
+        self.assertEqual(card["item"], "Uul-Netol's Catalyst")
+        self.assertEqual(card["qty"], 3)
+
     def test_no_capital_explains_itself(self):
         # the heart of the user's confusion: with almost no liquid capital the
         # board is empty — but the status now says exactly why, never silent
