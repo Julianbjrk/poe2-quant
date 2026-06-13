@@ -96,7 +96,9 @@ def make_handler(io, token):
                           "qty": float(body["qty"]), "px": float(body["px"]),
                           "card_id": body.get("card_id"), "sig": body.get("sig"),
                           "target_px": body.get("target_px"),
-                          "note": body.get("note", "card")}
+                          # keep the card's own words so a resting order can be reopened
+                          "head": body.get("head"), "plan": body.get("plan"),
+                          "why": body.get("why"), "note": body.get("note", "card")}
                     if ledger == "paper" and not body.get("instant"):
                         eid = store.append(c, "order", ev)
                         out = {"ok": True, "order": eid}

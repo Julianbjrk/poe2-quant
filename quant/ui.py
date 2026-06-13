@@ -157,17 +157,19 @@ return `<div class="card ${c.act}"><div class="head">${esc(c.head)}</div>
 
 async function take(b){
 const paper=D.cfg.mode==="paper";const d=b.dataset;
+const card=((D.snap&&D.snap.cards)||[]).find(x=>x.id===d.id)||{};
+const txt={head:card.head,plan:card.plan,why:card.why};  // kept on the order so it can be reopened later
 try{
 if(paper){b.disabled=true;
 const instant=d.act==="ABANDON";
 await api("/api/take",{card_id:d.id,item:d.item,side:d.side,qty:num(d.qty),px:num(d.px),
-target_px:d.tgt?num(d.tgt):null,sig:d.sig,ledger:"paper",instant});
+target_px:d.tgt?num(d.tgt):null,sig:d.sig,ledger:"paper",instant,...txt});
 toast(instant?"sold at market (paper)":"resting order set — it fills only when the market actually trades through");load();}
 else{const c=b.nextElementSibling;if(c.hidden){c.hidden=false;return}
 const[q,p]=c.querySelectorAll("input");const qty=num(q.value),px=num(p.value);
 if(!(qty>0)||!(px>0))return toast("enter a positive qty and a per-unit price");
 await api("/api/take",{card_id:d.id,item:d.item,side:d.side,qty,px,
-target_px:d.tgt?num(d.tgt):null,sig:d.sig,ledger:"real"});
+target_px:d.tgt?num(d.tgt):null,sig:d.sig,ledger:"real",...txt});
 toast("fill recorded — your real numbers, not the card's");load();}
 }catch(e){b.disabled=false;toast("couldn't record: "+e.message)}}
 
@@ -188,9 +190,17 @@ $("#grad").textContent=(s.grad&&s.grad.line)||"";
 $("#gradnote").textContent=(s.grad&&s.grad.line)||"";
 renderCards(s,D.orders);
 renderStatus(s.status);
-$("#orders tbody").innerHTML=(D.orders||[]).map(o=>`<tr><td>${esc(o.item)}</td><td>${o.side}</td>
-<td>${o.qty}</td><td>${o.px}</td><td><a data-cancel="${o.id}">cancel</a></td></tr>`).join("")
+$("#orders tbody").innerHTML=(D.orders||[]).map(o=>{
+const tgt=o.target_px?`sell at <b>${o.target_px}</b> ex`:"<span class='k'>no target stored</span>";
+const det=(o.head||o.plan||o.why)
+ ?`${esc(o.head||"")}${o.plan?"<br>"+esc(o.plan):""}${o.why?"<br><span class='k'>"+esc(o.why)+"</span>":""}`
+ :`bid ${o.qty}× ${esc(o.item)} at ${o.px} ex`+(o.target_px?` → when it fills, sell at ${o.target_px} ex`:"")
+   +(o.sig?` · signal ${esc(o.sig)}`:"")+(o.ts?` · placed ${esc(o.ts.slice(5,16).replace("T"," "))}`:"");
+return `<tr><td>${esc(o.item)}</td><td>${o.side} ${o.qty} @ ${o.px} ex</td><td>${tgt}</td>
+<td><a data-od="${o.id}">show card ▸</a></td><td><a data-cancel="${o.id}">cancel</a></td></tr>
+<tr id="od${o.id}" hidden><td colspan="5" style="background:rgba(0,0,0,.18)">${det}</td></tr>`}).join("")
 ||"<tr><td class='k'>none</td></tr>";
+$("#orders").querySelectorAll("[data-od]").forEach(a=>a.onclick=()=>{const r=$("#od"+a.dataset.od);if(r)r.hidden=!r.hidden});
 $("#orders").querySelectorAll("[data-cancel]").forEach(a=>a.onclick=async()=>{
 await api("/api/void",{id:+a.dataset.cancel,kind:"order"});toast("order cancelled");load()});
 FILLS={};(D.fills||[]).forEach(f=>FILLS[f.id]=f);
@@ -243,12 +253,14 @@ function renderStatus(st){
 if(!st){$("#status").innerHTML="";return}
 const bits=[`<b>${st.scanned}</b> items scanned`];
 bits.push(`<b>${st.positions}</b> held`);
-if(st.orders)bits.push(`<b>${st.orders}</b> resting order${st.orders>1?"s":""}`);
+if(st.orders)bits.push(`<a id="gotoorders"><b>${st.orders}</b> resting order${st.orders>1?"s":""}</a>`);
 bits.push(`<b>${st.entry_cards}</b> new idea${st.entry_cards===1?"":"s"}`);
 if(st.deployable_div!=null)bits.push(`<b>${st.deployable_div}</b> div free to deploy`);
 let s=bits.join(" · ");
 if(!st.entry_cards&&st.entries_reason)s+=`<br>no new buys because: ${esc(st.entries_reason)}`;
-$("#status").innerHTML=s;}
+$("#status").innerHTML=s;
+const go=$("#gotoorders");if(go)go.onclick=()=>{$("#record").open=true;
+$("#orders").scrollIntoView({behavior:"smooth",block:"center"})};}
 
 function renderUpdate(u){
 u=u||{};const el=$("#updbanner");
