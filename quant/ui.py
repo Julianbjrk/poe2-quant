@@ -96,6 +96,9 @@ svg{display:block;width:100%;height:60px;margin-top:8px}
 <select id="s_mode"><option>paper</option><option>real</option></select>
 <button class="small" id="s_go">apply</button><button class="small" id="notif">enable exit alerts</button></div>
 <p class="k" id="gradnote" style="margin-top:8px"></p>
+<div class="grid" style="margin-top:6px"><button class="small" id="up_check">check for updates</button>
+<span class="k" id="up_status" style="align-self:center;grid-column:2/4"></span></div>
+<p class="k" id="verline" style="margin-top:6px"></p>
 <p class="k">advanced knobs: config.advanced.json (none required)</p></section>
 <section><h2>Diagnostics</h2><div id="diag" class="k"></div></section></details>
 <div id="toast"></div>
@@ -247,15 +250,18 @@ if(!st.entry_cards&&st.entries_reason)s+=`<br>no new buys because: ${esc(st.entr
 $("#status").innerHTML=s;}
 
 function renderUpdate(u){
-const el=$("#updbanner");
-if(!u||!u.available){el.hidden=true;return}
-el.hidden=false;
+u=u||{};const el=$("#updbanner");
+if(u.available){el.hidden=false;
 el.innerHTML=`<span>A new version is available — <b>${esc(u.current)} → ${esc(u.latest)}</b>. `
 +`Your trades and settings are kept.</span>`
 +`<button class="small" id="up_go">update &amp; restart</button>`
 +`<a id="up_skip">later</a>`;
-$("#up_go").onclick=applyUpdate;
-$("#up_skip").onclick=()=>{el.hidden=true};}
+$("#up_go").onclick=applyUpdate;$("#up_skip").onclick=()=>{el.hidden=true};}
+else el.hidden=true;
+// engine-room mirror: always shows the running version + check result
+const vs=$("#verline");if(vs)vs.textContent="running version "+((D&&D.version)||u.current||"?");
+const sx=$("#up_status");if(sx)sx.innerHTML=u.available?`update <b>${esc(u.latest)}</b> ready — use the banner at the top`
+:u.err?("check failed: "+esc(u.err)):u.latest?("up to date — "+esc(u.latest)):"not checked yet — click check";}
 
 async function applyUpdate(){
 const b=$("#up_go");b.disabled=true;b.textContent="updating…";
@@ -278,7 +284,11 @@ $("#f_hint").innerHTML=(q>0&&p>0)?`${q} × ${p} ex/unit = <b>${(q*p).toFixed(1)}
 
 async function load(){D=await api("/api/state");render()}
 $("#refresh").onclick=async()=>{$("#refresh").textContent="polling…";
-try{await api("/api/refresh",{})}finally{$("#refresh").textContent="refresh"}load()};
+try{await api("/api/refresh",{})}catch(e){}
+try{await api("/api/update")}catch(e){}      // refresh also re-checks for updates
+$("#refresh").textContent="refresh";load();};
+$("#up_check").onclick=async()=>{$("#up_status").textContent="checking…";
+try{await api("/api/update")}catch(e){toast("check failed: "+e.message)}load();};
 $("#trusttog").onclick=()=>{const d=$("#trustdetail");d.hidden=!d.hidden};
 $("#f_go").onclick=async()=>{
 const item=$("#f_item").value.trim(),qty=num($("#f_qty").value),px=num($("#f_px").value);
