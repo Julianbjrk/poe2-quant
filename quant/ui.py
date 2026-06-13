@@ -106,8 +106,11 @@ const hdrs=TOKEN?{"X-Quant-Token":TOKEN}:{ };
 function esc(s){return String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]))}
 function toast(m){const t=$("#toast");t.textContent=m;t.classList.add("show");
 clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove("show"),3200)}
-async function api(p,b){const r=await fetch(p,{method:b?"POST":"GET",headers:hdrs,
-body:b?JSON.stringify(b):undefined});return r.json()}
+async function api(p,b){const r=await fetch(p,{method:b?"POST":"GET",
+headers:b?{...hdrs,"Content-Type":"application/json"}:hdrs,body:b?JSON.stringify(b):undefined});
+let j=null;try{j=await r.json()}catch(_){}
+if(!r.ok)throw new Error((j&&j.err)||("server error "+r.status));return j||{}}
+function num(v){return parseFloat(String(v==null?"":v).replace(",","."))}
 function cls(n){return n>0?"pos":n<0?"neg":""}
 function dett(d){return "<table class='dettbl'>"+Object.entries(d).map(([k,v])=>
 `<tr><td>${esc(k)}</td><td>${esc(typeof v==="number"?v:String(v))}</td></tr>`).join("")+"</table>"}
@@ -150,16 +153,19 @@ return `<div class="card ${c.act}"><div class="head">${esc(c.head)}</div>
 
 async function take(b){
 const paper=D.cfg.mode==="paper";const d=b.dataset;
+try{
 if(paper){b.disabled=true;
 const instant=d.act==="ABANDON";
-await api("/api/take",{card_id:d.id,item:d.item,side:d.side,qty:+d.qty,px:+d.px,
-target_px:d.tgt?+d.tgt:null,sig:d.sig,ledger:"paper",instant});
+await api("/api/take",{card_id:d.id,item:d.item,side:d.side,qty:num(d.qty),px:num(d.px),
+target_px:d.tgt?num(d.tgt):null,sig:d.sig,ledger:"paper",instant});
 toast(instant?"sold at market (paper)":"resting order set — it fills only when the market actually trades through");load();}
 else{const c=b.nextElementSibling;if(c.hidden){c.hidden=false;return}
-const[q,p]=c.querySelectorAll("input");
-await api("/api/take",{card_id:d.id,item:d.item,side:d.side,qty:+q.value,px:+p.value,
-target_px:d.tgt?+d.tgt:null,sig:d.sig,ledger:"real"});
-toast("fill recorded — your real numbers, not the card's");load();}}
+const[q,p]=c.querySelectorAll("input");const qty=num(q.value),px=num(p.value);
+if(!(qty>0)||!(px>0))return toast("enter a positive qty and a per-unit price");
+await api("/api/take",{card_id:d.id,item:d.item,side:d.side,qty,px,
+target_px:d.tgt?num(d.tgt):null,sig:d.sig,ledger:"real"});
+toast("fill recorded — your real numbers, not the card's");load();}
+}catch(e){b.disabled=false;toast("couldn't record: "+e.message)}}
 
 function render(){
 renderUpdate(D.update);
@@ -266,7 +272,7 @@ updateHint();$("#record").open=true;$("#f_item").scrollIntoView({behavior:"smoot
 toast("editing trade #"+f.id+" — fix the numbers (price is per unit), then save");}
 function cancelEdit(){EDITING=null;$("#f_go").textContent="record fill";$("#f_cancel").hidden=true;
 $("#fillform").classList.remove("editing");$("#f_qty").value=$("#f_px").value="";updateHint();}
-function updateHint(){const q=parseFloat($("#f_qty").value),p=parseFloat($("#f_px").value);
+function updateHint(){const q=num($("#f_qty").value),p=num($("#f_px").value);
 const base="Price is per unit (ex), the same \"ex each\" the card shows — not the order total.";
 $("#f_hint").innerHTML=(q>0&&p>0)?`${q} × ${p} ex/unit = <b>${(q*p).toFixed(1)} ex total</b>. ${base}`:base;}
 
@@ -274,16 +280,22 @@ async function load(){D=await api("/api/state");render()}
 $("#refresh").onclick=async()=>{$("#refresh").textContent="polling…";
 try{await api("/api/refresh",{})}finally{$("#refresh").textContent="refresh"}load()};
 $("#trusttog").onclick=()=>{const d=$("#trustdetail");d.hidden=!d.hidden};
-$("#f_go").onclick=async()=>{if(!$("#f_item").value||!$("#f_qty").value||!$("#f_px").value)return alert("item, qty, price");
-const body={item:$("#f_item").value,side:$("#f_side").value,qty:+$("#f_qty").value,px:+$("#f_px").value};
+$("#f_go").onclick=async()=>{
+const item=$("#f_item").value.trim(),qty=num($("#f_qty").value),px=num($("#f_px").value);
+if(!item||!(qty>0)||!(px>0))return toast("need an item, a positive qty, and a positive price PER UNIT");
+const body={item,side:$("#f_side").value,qty,px};
+try{
 if(EDITING){body.id=EDITING.id;body.ledger=EDITING.ledger;
-await api("/api/fill_edit",body);toast("trade #"+EDITING.id+" updated — everything recalculated");cancelEdit();}
+const r=await api("/api/fill_edit",body);toast("trade #"+EDITING.id+" updated → new #"+(r.fill||"?")+", everything recalculated");cancelEdit();}
 else{await api("/api/fill",body);toast("fill recorded");$("#f_qty").value=$("#f_px").value="";updateHint();}
-load();};
+load();
+}catch(e){toast("couldn't save: "+e.message)}};
 $("#f_cancel").onclick=cancelEdit;
 $("#f_qty").oninput=updateHint;$("#f_px").oninput=updateHint;
-$("#c_go").onclick=async()=>{await api("/api/holdings",{div:$("#c_div").value||0,ex:$("#c_ex").value||0,chaos:$("#c_chaos").value||0});
-toast("holdings set — sizing and benchmarks now use your real capital");load()};
+$("#c_go").onclick=async()=>{try{
+await api("/api/holdings",{div:num($("#c_div").value)||0,ex:num($("#c_ex").value)||0,chaos:num($("#c_chaos").value)||0});
+toast("holdings set — sizing and benchmarks now use your real capital");load();
+}catch(e){toast("couldn't save holdings: "+e.message)}};
 $("#s_go").onclick=async()=>{await api("/api/mode",{risk:$("#s_risk").value,mode:$("#s_mode").value});
 toast("applied");load()};
 $("#notif").onclick=()=>Notification.requestPermission().then(p=>toast(p==="granted"?
