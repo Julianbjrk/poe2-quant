@@ -46,6 +46,10 @@ input,select{background:var(--bg);border:1px solid var(--line);color:var(--ink);
 padding:10px 14px;opacity:0;transition:opacity .3s;pointer-events:none;z-index:9;max-width:360px}
 #toast.show{opacity:1}
 #debrief{border:1px solid var(--info);background:var(--panel);padding:10px 14px;margin:12px 0;font-size:13px}
+#updbanner{border:1px solid var(--info);background:var(--panel);padding:10px 14px;margin:12px 0;font-size:13px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+#status{color:var(--dim);font-size:12px;padding:4px 2px 8px;letter-spacing:.04em}
+#status b{color:var(--ink)}
+.editing input,.editing select{border-color:var(--gold)}
 .confirm{display:grid;grid-template-columns:1fr 1fr auto;gap:8px;margin-top:10px}
 svg{display:block;width:100%;height:60px;margin-top:8px}
 </style></head><body>
@@ -54,21 +58,23 @@ svg{display:block;width:100%;height:60px;margin-top:8px}
 <span class="v" id="delta"></span></span>
 <span style="margin-left:auto"><span id="dot" title=""></span>
 <button class="small" id="refresh" style="margin-left:10px">refresh</button></span></header>
+<div id="updbanner" hidden></div>
 <div id="trust"><span id="trustline">…</span> <a id="trusttog">details ▸</a>
 <div id="trustdetail" hidden></div></div>
 <div id="grad"></div>
 <div id="debrief" hidden></div>
+<div id="status"></div>
 <div id="cards"></div>
 
 <details id="record"><summary>Record — orders, trades, capital</summary>
 <section><h2>Resting orders</h2><table id="orders"><tbody></tbody></table></section>
 <section><h2>Trades</h2><table id="trades"><thead><tr><th>when</th><th>item</th><th>side</th>
-<th>qty</th><th>px ex</th><th></th><th></th></tr></thead><tbody></tbody></table>
-<div class="grid" style="margin-top:10px">
+<th>qty</th><th>ex / unit</th><th></th><th></th></tr></thead><tbody></tbody></table>
+<div class="grid" id="fillform" style="margin-top:10px">
 <input id="f_item" placeholder="item"><select id="f_side"><option>buy</option><option>sell</option></select>
-<input id="f_qty" placeholder="qty" inputmode="decimal"><input id="f_px" placeholder="price ex" inputmode="decimal">
-<button class="small" id="f_go">record fill</button></div>
-<p class="k" style="margin:8px 0 0">corrections are new events — voiding never rewrites history</p></section>
+<input id="f_qty" placeholder="qty" inputmode="decimal"><input id="f_px" placeholder="price PER UNIT (ex)" inputmode="decimal">
+<button class="small" id="f_go">record fill</button><button class="small" id="f_cancel" hidden>cancel edit</button></div>
+<p class="k" id="f_hint" style="margin:8px 0 0">Price is <b>per unit</b>, in exalted — the same "ex each" number the card shows, not the order total. Click <b>edit</b> on any trade to fix one; everything recalculates.</p></section>
 <section><h2>Capital — what you hold right now (liquid, not positions)</h2>
 <div class="grid"><input id="c_div" placeholder="divine" inputmode="decimal">
 <input id="c_ex" placeholder="exalted" inputmode="decimal">
@@ -95,6 +101,7 @@ svg{display:block;width:100%;height:60px;margin-top:8px}
 <div id="toast"></div>
 <script>
 const TOKEN="__TOKEN__";const $=s=>document.querySelector(s);let D=null;
+let EDITING=null,FILLS={};
 const hdrs=TOKEN?{"X-Quant-Token":TOKEN}:{ };
 function esc(s){return String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]))}
 function toast(m){const t=$("#toast");t.textContent=m;t.classList.add("show");
@@ -135,7 +142,7 @@ const label=paper?(c.act==="ABANDON"?"Sell now (paper)":"Take it (paper)"):"I di
 btn=`<button data-take="1" data-id="${esc(c.id)}" data-item="${esc(c.item)}" data-side="${side}"
 data-qty="${c.qty}" data-px="${side==="sell"?(c.target_px??c.px):c.px}" data-tgt="${c.target_px??""}"
 data-sig="${esc(c.sig||c.act)}" data-act="${c.act}">${label}</button>
-<div class="confirm" hidden><input value="${c.qty}" inputmode="decimal"><input value="${side==="sell"?(c.target_px??c.px):c.px}" inputmode="decimal">
+<div class="confirm" hidden><input value="${c.qty}" placeholder="qty" title="how many" inputmode="decimal"><input value="${side==="sell"?(c.target_px??c.px):c.px}" placeholder="ex per unit" title="price per unit in exalted" inputmode="decimal">
 <button class="small">confirm</button></div>`;}
 return `<div class="card ${c.act}"><div class="head">${esc(c.head)}</div>
 <div class="plan">${esc(c.plan||"")}</div>
@@ -155,6 +162,7 @@ target_px:d.tgt?+d.tgt:null,sig:d.sig,ledger:"real"});
 toast("fill recorded — your real numbers, not the card's");load();}}
 
 function render(){
+renderUpdate(D.update);
 const s=D.snap;if(!s){$("#cards").innerHTML="<div id='notrade'><b>First poll running…</b>refresh in a moment</div>";return}
 $("#league").textContent=s.league||"";document.title="QUANT · "+(s.league||"");
 $("#mode").textContent=D.cfg.mode.toUpperCase();$("#mode").className="chip "+D.cfg.mode;
@@ -169,15 +177,18 @@ $("#trustline").textContent=s.trust||"";
 $("#grad").textContent=(s.grad&&s.grad.line)||"";
 $("#gradnote").textContent=(s.grad&&s.grad.line)||"";
 renderCards(s,D.orders);
+renderStatus(s.status);
 $("#orders tbody").innerHTML=(D.orders||[]).map(o=>`<tr><td>${esc(o.item)}</td><td>${o.side}</td>
 <td>${o.qty}</td><td>${o.px}</td><td><a data-cancel="${o.id}">cancel</a></td></tr>`).join("")
 ||"<tr><td class='k'>none</td></tr>";
 $("#orders").querySelectorAll("[data-cancel]").forEach(a=>a.onclick=async()=>{
 await api("/api/void",{id:+a.dataset.cancel,kind:"order"});toast("order cancelled");load()});
+FILLS={};(D.fills||[]).forEach(f=>FILLS[f.id]=f);
 $("#trades tbody").innerHTML=(D.fills||[]).map(f=>`<tr><td>${esc(f.ts.slice(5,16).replace("T"," "))}</td>
 <td>${esc(f.item)}</td><td>${f.side}</td><td>${f.qty}</td><td>${f.px}</td>
-<td class="k">${f.ledger}</td><td><a data-void="${f.id}">void</a></td></tr>`).join("")
+<td class="k">${f.ledger}</td><td><a data-edit="${f.id}">edit</a> · <a data-void="${f.id}">void</a></td></tr>`).join("")
 ||"<tr><td colspan=7 class='k'>no fills yet</td></tr>";
+$("#trades").querySelectorAll("[data-edit]").forEach(a=>a.onclick=()=>{const f=FILLS[a.dataset.edit];if(f)startEdit(f)});
 $("#trades").querySelectorAll("[data-void]").forEach(a=>a.onclick=async()=>{
 if(confirm("Void fill #"+a.dataset.void+"? (a correction event is appended; nothing is rewritten)"))
 {await api("/api/void",{id:+a.dataset.void});toast("voided");load()}});
@@ -218,13 +229,59 @@ e.kind==="fill"?`${e.side} ${e.qty}× ${e.item} @ ${e.px}`:
 `${e.state} ${String(e.card_id||"").split(":").slice(0,2).join(" ")}${e.reason?" — "+e.reason:""}`).join(" · "));});}
 localStorage.setItem("q_seen",new Date().toISOString());}
 
+function renderStatus(st){
+if(!st){$("#status").innerHTML="";return}
+const bits=[`<b>${st.scanned}</b> items scanned`];
+bits.push(`<b>${st.positions}</b> held`);
+if(st.orders)bits.push(`<b>${st.orders}</b> resting order${st.orders>1?"s":""}`);
+bits.push(`<b>${st.entry_cards}</b> new idea${st.entry_cards===1?"":"s"}`);
+if(st.deployable_div!=null)bits.push(`<b>${st.deployable_div}</b> div free to deploy`);
+let s=bits.join(" · ");
+if(!st.entry_cards&&st.entries_reason)s+=`<br>no new buys because: ${esc(st.entries_reason)}`;
+$("#status").innerHTML=s;}
+
+function renderUpdate(u){
+const el=$("#updbanner");
+if(!u||!u.available){el.hidden=true;return}
+el.hidden=false;
+el.innerHTML=`<span>A new version is available — <b>${esc(u.current)} → ${esc(u.latest)}</b>. `
++`Your trades and settings are kept.</span>`
++`<button class="small" id="up_go">update &amp; restart</button>`
++`<a id="up_skip">later</a>`;
+$("#up_go").onclick=applyUpdate;
+$("#up_skip").onclick=()=>{el.hidden=true};}
+
+async function applyUpdate(){
+const b=$("#up_go");b.disabled=true;b.textContent="updating…";
+const r=await api("/api/update_apply",{});
+if(r&&r.ok){toast("installed "+r.version+" — restarting, the page will reconnect");
+(function wait(){fetch("/api/state",{headers:hdrs}).then(r=>r.ok?location.reload():setTimeout(wait,1500))
+.catch(()=>setTimeout(wait,1500))})();}
+else{b.disabled=false;b.textContent="update & restart";toast("update failed: "+((r&&r.err)||"unknown"))}}
+
+function startEdit(f){EDITING=f;
+$("#f_item").value=f.item;$("#f_side").value=f.side;$("#f_qty").value=f.qty;$("#f_px").value=f.px;
+$("#f_go").textContent="save edit #"+f.id;$("#f_cancel").hidden=false;$("#fillform").classList.add("editing");
+updateHint();$("#record").open=true;$("#f_item").scrollIntoView({behavior:"smooth",block:"center"});
+toast("editing trade #"+f.id+" — fix the numbers (price is per unit), then save");}
+function cancelEdit(){EDITING=null;$("#f_go").textContent="record fill";$("#f_cancel").hidden=true;
+$("#fillform").classList.remove("editing");$("#f_qty").value=$("#f_px").value="";updateHint();}
+function updateHint(){const q=parseFloat($("#f_qty").value),p=parseFloat($("#f_px").value);
+const base="Price is per unit (ex), the same \"ex each\" the card shows — not the order total.";
+$("#f_hint").innerHTML=(q>0&&p>0)?`${q} × ${p} ex/unit = <b>${(q*p).toFixed(1)} ex total</b>. ${base}`:base;}
+
 async function load(){D=await api("/api/state");render()}
 $("#refresh").onclick=async()=>{$("#refresh").textContent="polling…";
 try{await api("/api/refresh",{})}finally{$("#refresh").textContent="refresh"}load()};
 $("#trusttog").onclick=()=>{const d=$("#trustdetail");d.hidden=!d.hidden};
 $("#f_go").onclick=async()=>{if(!$("#f_item").value||!$("#f_qty").value||!$("#f_px").value)return alert("item, qty, price");
-await api("/api/fill",{item:$("#f_item").value,side:$("#f_side").value,qty:+$("#f_qty").value,px:+$("#f_px").value});
-toast("fill recorded");$("#f_qty").value=$("#f_px").value="";load()};
+const body={item:$("#f_item").value,side:$("#f_side").value,qty:+$("#f_qty").value,px:+$("#f_px").value};
+if(EDITING){body.id=EDITING.id;body.ledger=EDITING.ledger;
+await api("/api/fill_edit",body);toast("trade #"+EDITING.id+" updated — everything recalculated");cancelEdit();}
+else{await api("/api/fill",body);toast("fill recorded");$("#f_qty").value=$("#f_px").value="";updateHint();}
+load();};
+$("#f_cancel").onclick=cancelEdit;
+$("#f_qty").oninput=updateHint;$("#f_px").oninput=updateHint;
 $("#c_go").onclick=async()=>{await api("/api/holdings",{div:$("#c_div").value||0,ex:$("#c_ex").value||0,chaos:$("#c_chaos").value||0});
 toast("holdings set — sizing and benchmarks now use your real capital");load()};
 $("#s_go").onclick=async()=>{await api("/api/mode",{risk:$("#s_risk").value,mode:$("#s_mode").value});

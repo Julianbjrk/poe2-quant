@@ -55,6 +55,23 @@ class TestLedger(StoreCase):
                 self.assertEqual(st["cost_ex"], st["cost_ex"])  # not NaN
                 self.assertGreaterEqual(st["avg"], 0)
 
+    def test_edit_via_void_and_reappend_refolds(self):
+        # the fill-edit path: a wrong price is corrected by voiding + re-adding;
+        # positions must reflect the new number, not the old
+        c = store.connect(self.path)
+        bad = store.append(c, "fill", {"ledger": "paper", "item": "X", "side": "buy",
+                                       "qty": 2, "px": 200, "card_id": "k1",
+                                       "target_px": 240, "note": "card"})
+        self.assertAlmostEqual(store.positions(c, "paper")["X"]["avg"], 200)
+        orig = store.event_by_id(c, bad)
+        store.append(c, "fill_void", {"void_id": bad})
+        store.append(c, "fill", {"ledger": "paper", "item": "X", "side": "buy",
+                                 "qty": 2, "px": 100, "card_id": orig["card_id"],
+                                 "target_px": orig["target_px"], "note": "edit"})
+        pos = store.positions(c, "paper")["X"]
+        self.assertAlmostEqual(pos["avg"], 100)        # corrected price
+        self.assertEqual(pos["target_px"], 240)        # card linkage preserved
+
     def test_pending_orders(self):
         c = store.connect(self.path)
         o1 = store.append(c, "order", {"ledger": "paper", "item": "X", "side": "buy",

@@ -19,6 +19,9 @@ SURFACE_DEFAULTS = {
     "mode": "paper",            # paper | real — the app tells you when real is earned
     "risk": "conservative",     # conservative | standard | aggressive
     "pins": [],                 # manual theses: {"label","match","source","entry_max_ex","exit_target_ex","budget_div"}
+    "update_branch": "claude/confident-mccarthy-clkrci",  # GitHub branch the updater tracks
+    "auto_update": False,       # True = apply updates on startup; False = notify + one-click
+    "auto_bootstrap": True,     # fetch league history + calibrate on first run, no flag needed
 }
 
 # Presets scale the few judgment calls; everything else is calibrated output.

@@ -5,28 +5,53 @@ Nothing here automates gameplay or trading (that would breach GGG's terms — pr
 not). Python 3.10+, **stdlib only, zero pip installs, zero required configuration.**
 
 ```
-python quant.py            # serves http://localhost:8377 — that's the whole setup
-python quant.py --doctor   # API + database + model health check (run this first)
-python quant.py --bootstrap  # pre-train from league history (do this second, ~1 min)
+python quant.py            # serves http://localhost:8377 — that's the whole setup,
+                           #   incl. first-run calibration and update checks
+python quant.py --doctor   # API + database + model health check
 python quant.py --once     # one dry-run poll, printed as JSON
 python quant.py --backtest # walk-forward replay of your own tick history
+python quant.py --bootstrap  # force a re-pretrain from league history
+python quant.py --update     # check GitHub and update in place
 python quant.py --host 0.0.0.0   # LAN mode for a phone (token printed at startup)
 ```
+Just `python quant.py` is enough every time — it bootstraps calibration on first run and checks
+for updates itself. The other commands are for when you want to force one of those by hand.
 
-## Bootstrap: don't wait two weeks to be calibrated
-`--bootstrap` pulls the league's **daily history since league start** (poe2scout
-DailyStatsHistory, top ~150 items by volume, one polite request each), then re-runs the DIP logic
-over that history walk-forward — same anchor, same idio-vs-market gate, same knife guard, same
-exit quantile — and **measures** how often such dips actually recovered and how much of the gap
-they closed. Those measurements replace the guessed priors (capped at ~30 pseudo-observations so
-live graded outcomes keep the final say, and never applied over existing live evidence), and the
-fetched history gives every item a league anchor so DIP is active and calibrated **from poll #1**
-instead of after a day of tick collection. The engine also tops up daily history for candidates
-automatically each poll.
+## Bootstrap: don't wait two weeks to be calibrated (now automatic)
+On first run for a league, QUANT pulls the league's **daily history since league start** (poe2scout
+DailyStatsHistory, top ~150 items by volume, one polite request each) in the background, then
+re-runs the DIP logic over that history walk-forward — same anchor, idio-vs-market gate, knife
+guard, exit quantile as the live signal — and **measures** how often such dips actually recovered
+and how much of the gap they closed. Those measurements replace the guessed priors (capped at ~30
+pseudo-observations so live graded outcomes keep the final say, never applied over existing live
+evidence), and the fetched history gives every item a league anchor so DIP is calibrated **from
+poll #1**. Runs once per league; `--bootstrap` forces it again. Set `auto_bootstrap: false` in
+config.json to disable.
 
 What the bootstrap honestly cannot do: daily listing medians carry no intraday path, so it can't
 prove your limit orders would have filled. That's the part the shadow book and the 2-week paper
 graduation validate forward — bootstrap shortens the *calibration* ramp, not the *trust* bar.
+
+## Staying current
+QUANT checks its GitHub branch for a newer `VERSION` on startup and a few times a day. When one
+exists, a banner offers **update & restart** — it downloads the branch, byte-compiles it before
+trusting it, backs up the old code, swaps it in (your `config*.json` and `quant.db` are never
+touched), and restarts into the new version. Set `auto_update: true` in config.json to apply on
+startup without asking, or `update_branch` to track a different branch.
+
+## Recording trades — price is *per unit*
+When you log or take a fill, **price is per unit, in exalted** — the same "X ex each" the card
+shows, not the order total. The form previews `qty × price = total` so it's unambiguous. Got one
+wrong? Hit **edit** on any row in the Trades table (under *Record ▸*): it appends a correction
+event (nothing is ever rewritten) and every position, benchmark and net-worth number re-folds
+automatically. The card linkage and exit target are preserved across an edit.
+
+## Why did the cards disappear? — the status line
+Above the cards there's always a one-line status: items scanned, positions held, resting orders,
+new ideas, and divines free to deploy. When there are no new buys it tells you the reason —
+"all 3 position slots are in use", "no liquid capital free to deploy (set/raise holdings)",
+"paused — the whole market is moving hard", or the closest near-miss. An empty board is never a
+mystery: most of the time it just means sitting tight is correct, and now it says so.
 
 ## The whole app is one question
 The page is a single column: a header strip (net worth vs the **worst** of three benchmarks,

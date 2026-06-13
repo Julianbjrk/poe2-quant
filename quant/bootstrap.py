@@ -19,7 +19,7 @@ import math
 from . import store
 from .config import DB_PATH
 from .models import daily_anchor, median
-from .score import calib_default
+from .score import calib_default, today
 from .util import best_match, clamp
 
 PSEUDO_N_CAP = 30      # daily-scale evidence never outweighs ~30 live outcomes
@@ -140,11 +140,15 @@ def apply_priors(c, res, adv, log=print):
     return True
 
 
-def run(cfg, io=None, db_path=None, top_n=150, log=print):
+def run(cfg, io=None, db_path=None, top_n=150, log=print, force=False):
     from .sources import LiveIO, resolve_league
     io = io or LiveIO()
     c = store.connect(str(db_path or DB_PATH))
     league = resolve_league(io, cfg)["name"]
+    if not force and store.kv_get(c, "boot_done:" + league):
+        c.close()
+        log(f"bootstrap: already done for '{league}' (use --bootstrap to force)")
+        return {"skipped": True}
     log(f"bootstrap: fetching league history for '{league}' (top {top_n} by volume)…")
     n = fetch_history(io, league, c, top_n, log)
     if n:
@@ -154,6 +158,9 @@ def run(cfg, io=None, db_path=None, top_n=150, log=print):
     log(f"  walk-forward over history: {res['items']} items, {res['events']} dip "
         f"events, hit rate {res['hit_rate']}, mean reversion {res['rev_mean']}")
     applied = apply_priors(c, res, cfg["adv"], log)
+    if n:  # only mark done once we actually have history, so an offline first
+        store.kv_set(c, "boot_done:" + league, today())  # run retries next launch
+        c.commit()
     c.close()
     log("bootstrap done. NOT waived: the 2-week paper graduation — daily medians "
         "can't prove fills; the shadow book still validates execution forward.")

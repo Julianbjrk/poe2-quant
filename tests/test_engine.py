@@ -91,9 +91,26 @@ class TestEngine(unittest.TestCase):
         self.assertIn("divines", snap["no_trade"]["line"])
         self.assertTrue(snap["trust"])
         self.assertIn(snap["grad"]["ready"], (True, False))
+        # always-on status strip — an empty board is never a mystery
+        self.assertIn("status", snap)
+        self.assertEqual(snap["status"]["positions"], 0)
+        self.assertEqual(snap["status"]["scanned"], snap["stats"]["scanned"])
         c = store.connect(self.db)
         self.assertIsNotNone(store.kv_json(c, "last_snap"))
         c.close()
+
+    def test_no_capital_explains_itself(self):
+        # the heart of the user's confusion: with almost no liquid capital the
+        # board is empty — but the status now says exactly why, never silent
+        self.cfg["mode"] = "real"
+        c = store.connect(self.db)
+        store.append(c, "holdings_set", {"div": 0, "ex": 2, "chaos": 0})
+        c.commit()
+        c.close()
+        snap = self.play_script(dip_script())
+        entries = [c for c in snap["cards"] if c["act"] in ("DIP", "MAKE", "ROUTE")]
+        self.assertFalse(entries)
+        self.assertIsNotNone(snap["status"]["entries_reason"])
 
     def test_full_cycle(self):
         snap = self.play_script(dip_script())

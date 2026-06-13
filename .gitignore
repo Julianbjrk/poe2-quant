@@ -5,3 +5,7 @@ once.json
 once.err
 __pycache__/
 *.pyc
+
+# updater scratch — never tracked
+.quant_backup/
+.quant_update_tmp/

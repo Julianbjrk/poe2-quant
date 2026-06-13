@@ -124,6 +124,14 @@ def events(c, kinds=None, since_id=0, since_ts=None):
             for i, ts, k, p in c.execute(q, args)]
 
 
+def event_by_id(c, eid):
+    row = c.execute("SELECT id, ts, kind, payload FROM events WHERE id=?", (int(eid),)).fetchone()
+    if not row:
+        return None
+    i, ts, k, p = row
+    return {"id": i, "ts": ts, "kind": k, **json.loads(p)}
+
+
 def voided_ids(c):
     return {e["void_id"] for e in events(c, ["fill_void", "order_cancel"]) if e.get("void_id")}
 

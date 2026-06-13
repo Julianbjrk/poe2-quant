@@ -14,6 +14,7 @@ from .sources import LiveIO, NINJA_TYPES, resolve_league
 
 
 def poller_loop(io):
+    last_update_check = 0.0
     while True:
         cfg = config.load()
         try:
@@ -25,7 +26,39 @@ def poller_loop(io):
                   + (f" warn={s['errors']}" if s.get("errors") else ""))
         except Exception as e:
             print("poll failed:", e)
+        if time.time() - last_update_check > 3 * 3600:  # check GitHub a few times a day
+            last_update_check = time.time()
+            try:
+                refresh_update_status(cfg)
+            except Exception:
+                pass
         time.sleep(max(2, int(cfg["adv"].get("poll_minutes", 5))) * 60)
+
+
+def refresh_update_status(cfg):
+    from . import update
+    res = update.check(cfg["update_branch"])
+    c = store.connect(config.DB_PATH)
+    store.kv_set_json(c, "update_status", {**res, "ts": time.strftime("%Y-%m-%dT%H:%M:%S")})
+    c.commit()
+    c.close()
+    if res.get("available"):
+        print(f"UPDATE available: {res['current']} → {res['latest']} "
+              "(open the dashboard to install, or it auto-applies if enabled)")
+    return res
+
+
+def auto_bootstrap(io):
+    """First-run calibration from league history, in the background so serving
+    starts instantly. Idempotent — skips once done for the league."""
+    cfg = config.load()
+    if not cfg.get("auto_bootstrap"):
+        return
+    try:
+        from .bootstrap import run as boot_run
+        boot_run(cfg, io=io, log=lambda m: print("  " + m))
+    except Exception as e:
+        print("auto-bootstrap skipped:", e)
 
 
 def doctor():
@@ -97,7 +130,17 @@ def main(argv=None):
         from .bootstrap import run as boot_run
         i = argv.index("--bootstrap")
         top = int(argv[i + 1]) if len(argv) > i + 1 and argv[i + 1].isdigit() else 150
-        boot_run(config.load(), top_n=top)
+        boot_run(config.load(), top_n=top, force=True)
+        return
+    if "--update" in argv:
+        from . import update
+        cfg = config.load()
+        res = update.check(cfg["update_branch"])
+        print(f"current {res['current']} · latest {res.get('latest')} · "
+              + ("update available" if res.get("available") else "up to date"))
+        if res.get("available"):
+            r = update.apply(cfg["update_branch"])
+            print("updated to", r.get("version")) if r.get("ok") else print("update failed:", r.get("err"))
         return
     host = "127.0.0.1"
     if "--host" in argv:
@@ -106,9 +149,22 @@ def main(argv=None):
     if "--port" in argv:
         port = int(argv[argv.index("--port") + 1])
     token = secrets.token_urlsafe(9) if host not in ("127.0.0.1", "localhost") else None
-    config.load()
+    cfg = config.load()
     io = LiveIO()
+    # update check + auto-apply on startup (auto-apply only if the user opted in)
+    if "--no-update" not in argv:
+        try:
+            res = refresh_update_status(cfg)
+            if res.get("available") and cfg.get("auto_update"):
+                from . import update
+                print(f"auto-update: installing {res['latest']}…")
+                if update.apply(cfg["update_branch"]).get("ok"):
+                    print("auto-update: restarting into the new version…")
+                    update.restart()
+        except Exception as e:
+            print("update check skipped:", e)
     threading.Thread(target=poller_loop, args=(io,), daemon=True).start()
+    threading.Thread(target=auto_bootstrap, args=(io,), daemon=True).start()
     try:
         httpd = serve(io, host, port, token)
     except OSError as e:

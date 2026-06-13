@@ -1,10 +1,11 @@
 """HTTP server + JSON API. Loopback by default; --host binds wider behind a
 random token printed at startup (the page embeds it for its own API calls)."""
 import json
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from . import config, store
+from . import __version__, config, store
 from .engine import poll
 from .util import now_iso
 
@@ -46,6 +47,15 @@ def make_handler(io, token):
                 ev = store.events(c, ["card_event", "fill"], since_ts=since)[-30:]
                 c.close()
                 return self._send(200, json.dumps({"events": ev}))
+            if path == "/api/update":  # force a fresh check
+                from . import update
+                cfg = config.load()
+                res = update.check(cfg["update_branch"])
+                c = store.connect(config.DB_PATH)
+                store.kv_set_json(c, "update_status", {**res, "ts": now_iso()})
+                c.commit()
+                c.close()
+                return self._send(200, json.dumps(res))
             self._send(404, "{}")
 
         def state(self):
@@ -61,8 +71,12 @@ def make_handler(io, token):
                     for s in reversed(store.snaps_latest(c, 400))
                     if s.get("mode") == cfg["mode"]]
             c.close()
+            c2 = store.connect(config.DB_PATH)
+            upd = store.kv_json(c2, "update_status")
+            c2.close()
             return {"cfg": {k: cfg[k] for k in ("league", "mode", "risk", "pins")},
-                    "snap": snap, "fills": fills[:40], "orders": orders, "hist": hist}
+                    "snap": snap, "fills": fills[:40], "orders": orders, "hist": hist,
+                    "update": upd, "version": __version__}
 
         def do_POST(self):
             if not self._authed():
@@ -95,6 +109,29 @@ def make_handler(io, token):
                         "side": body.get("side", "buy"), "qty": float(body["qty"]),
                         "px": float(body["px"]), "note": body.get("note", "manual")})
                     out = {"ok": True, "fill": eid}
+                elif path == "/api/fill_edit":
+                    # event-sourced edit: void the old fill, append a corrected one.
+                    # Nothing is rewritten; positions/benchmarks re-fold automatically.
+                    old = store.event_by_id(c, int(body["id"]))
+                    if not old or old.get("kind") != "fill":
+                        return self._send(404, '{"ok":false,"err":"no such fill"}')
+                    store.append(c, "fill_void", {"void_id": old["id"], "note": "edited"})
+                    eid = store.append(c, "fill", {
+                        "ledger": body.get("ledger") or old.get("ledger") or cfg["mode"],
+                        "item": body.get("item", old["item"]),
+                        "side": body.get("side", old["side"]),
+                        "qty": float(body["qty"]), "px": float(body["px"]),
+                        # keep the card linkage + exit target so the position behaves
+                        "card_id": old.get("card_id"), "sig": old.get("sig"),
+                        "target_px": old.get("target_px"),
+                        "note": f"edit of #{old['id']}"})
+                    out = {"ok": True, "fill": eid, "voided": old["id"]}
+                elif path == "/api/update_apply":
+                    from . import update
+                    res = update.apply(cfg["update_branch"])
+                    if res.get("ok"):
+                        threading.Timer(0.8, update.restart).start()
+                    return self._send(200, json.dumps(res))
                 elif path == "/api/void":
                     kind = "order_cancel" if body.get("kind") == "order" else "fill_void"
                     store.append(c, kind, {"void_id": int(body["id"]),

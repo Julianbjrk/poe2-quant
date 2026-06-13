@@ -442,8 +442,10 @@ def _poll(cfg, io, db_path, store_snap):
     # ---- gates, sizing, card lifecycle -----------------------------------
     active = store.kv_json(c, "cards_active", [])
     pos_now = port["positions"]
+    n_orders = len(store.pending_orders(c, mode))
     bankroll_ex = port["liquid_ex"] + port["positions_ex"]
     deployable = max(port["liquid_ex"] - bankroll_ex * adv["liquid_reserve_pct"] / 100, 0)
+    deployable0 = deployable
     family_spent = {}
     for item, st in pos_now.items():
         f = fam.get(item, "?")
@@ -575,6 +577,28 @@ def _poll(cfg, io, db_path, store_snap):
                                  "ratio_err_pct": s["ratio"]["err_pct"]},
                          "sig": p["sig"], "deterministic": p["deterministic"]})
     cards_ui += holds
+    # always-on status: what the engine is doing right now, cards or not — so an
+    # empty board is never a mystery (see point: "no way for me to tell")
+    free_slots = max(0, preset["max_positions"] - len(pos_now) - n_orders)
+    if not rate:
+        entries_reason = "waiting for a price feed"
+    elif circuit:
+        entries_reason = "paused — the whole market is moving hard (circuit breaker)"
+    elif free_slots <= 0:
+        entries_reason = (f"all {preset['max_positions']} position slots are in use "
+                          f"({len(pos_now)} held, {n_orders} resting)")
+    elif deployable0 < 1:
+        entries_reason = "no liquid capital free to deploy (set/raise holdings under Record)"
+    elif miss:
+        entries_reason = f"closest idea {miss['item']} — {miss['reason']}"
+    else:
+        entries_reason = None
+    status = {"positions": len(pos_now), "orders": n_orders,
+              "entry_cards": len(active), "scanned": len(rows),
+              "slots_free": free_slots, "slots_total": preset["max_positions"],
+              "deployable_ex": round(deployable0, 1),
+              "deployable_div": round(deployable0 / rate, 2) if rate else None,
+              "entries_reason": entries_reason}
     grad_pts = store.kv_json(c, "grad_points", [])
     if ports["paper"]["nw_div"] is not None and bench:
         bdp = ports["paper"]["base_div"]
@@ -585,12 +609,11 @@ def _poll(cfg, io, db_path, store_snap):
     snap.update({
         "errors": errors[:6], "circuit": circuit, "market_z": round(market_z, 2),
         "trust": trust_line(graded30, mode), "grad": graduation(grad_pts, adv, mode),
-        "cards": cards_ui,
+        "cards": cards_ui, "status": status,
         "no_trade": None if any(c["act"] not in ("HOLD",) for c in cards_ui) else {
             "checked": len(rows), "miss": miss,
             "line": "Nothing worth your divines right now."
-                    + (f" Closest miss: {miss['item']} — {miss['reason']}." if miss else "")
-                    + (" Entries are paused: the whole market is moving hard." if circuit else "")},
+                    + (f" {entries_reason.capitalize()}." if entries_reason else "")},
         "scan": [{k: p[k] for k in ("sig", "item", "ev_pct", "p_hit", "vol_div")}
                  | {"ev_pct": round(p["ev_pct"], 1), "p_hit": round(p["p_hit"], 2),
                     "vol_div": round(p["vol_div"] or 0)} for p in props[:12]],
