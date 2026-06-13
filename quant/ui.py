@@ -50,6 +50,10 @@ padding:10px 14px;opacity:0;transition:opacity .3s;pointer-events:none;z-index:9
 #status{color:var(--dim);font-size:12px;padding:4px 2px 8px;letter-spacing:.04em}
 #status b{color:var(--ink)}
 .editing input,.editing select{border-color:var(--gold)}
+.acbox{position:fixed;background:var(--panel);border:1px solid var(--gold);max-height:240px;overflow:auto;z-index:50;font-size:13px;box-shadow:0 6px 18px rgba(0,0,0,.5)}
+.acitem{padding:6px 10px;cursor:pointer;white-space:nowrap}
+.acitem:hover,.acitem.sel{background:rgba(201,168,106,.2)}
+.matchbox input{max-width:240px}
 .confirm{display:grid;grid-template-columns:1fr 1fr auto;gap:8px;margin-top:10px}
 svg{display:block;width:100%;height:60px;margin-top:8px}
 </style></head><body>
@@ -71,7 +75,7 @@ svg{display:block;width:100%;height:60px;margin-top:8px}
 <section><h2>Trades</h2><table id="trades"><thead><tr><th>when</th><th>item</th><th>side</th>
 <th>qty</th><th>ex / unit</th><th></th><th></th></tr></thead><tbody></tbody></table>
 <div class="grid" id="fillform" style="margin-top:10px">
-<input id="f_item" placeholder="start typing — pick the exact item" list="namelist" autocomplete="off"><datalist id="namelist"></datalist>
+<input id="f_item" placeholder="start typing — pick from the list" autocomplete="off">
 <select id="f_side"><option>buy</option><option>sell</option></select>
 <input id="f_qty" placeholder="qty" inputmode="decimal"><input id="f_px" placeholder="price PER UNIT (ex)" inputmode="decimal">
 <button class="small" id="f_go">record fill</button><button class="small" id="f_cancel" hidden>cancel edit</button></div>
@@ -130,6 +134,11 @@ ${nt.checked??"?"} items checked · entries never notify — the next dip always
 else wrap.innerHTML=cards.map(c=>cardHTML(c,byCard)).join("");
 wrap.querySelectorAll("[data-take]").forEach(b=>b.onclick=()=>take(b));
 wrap.querySelectorAll("[data-close]").forEach(b=>b.onclick=()=>prefillClose(b.dataset.item,b.dataset.qty));
+wrap.querySelectorAll("[data-mtoggle]").forEach(a=>a.onclick=()=>{
+const mb=a.closest(".matchbox"),box=mb&&mb.querySelector("[data-mbox]");if(!box)return;
+box.hidden=!box.hidden;if(!box.hidden){const inp=box.querySelector("[data-minput]");attachAC(inp,()=>{});inp.focus();}});
+wrap.querySelectorAll("[data-mgo]").forEach(b=>b.onclick=()=>{
+const box=b.closest("[data-mbox]"),inp=box&&box.querySelector("[data-minput]");renameItem(b.dataset.item,inp?inp.value:"");});
 wrap.querySelectorAll("[data-det]").forEach(a=>a.onclick=()=>{const d=a.nextElementSibling;d.hidden=!d.hidden});
 wrap.querySelectorAll("[data-cancel]").forEach(a=>a.onclick=async()=>{
 await api("/api/void",{id:+a.dataset.cancel,kind:"order"});toast("order cancelled");load()});
@@ -145,7 +154,11 @@ const o=byCard[c.id];const paper=D.cfg.mode==="paper";
 let btn="";
 if(o)btn=`<div class="resting">order resting at ${o.px} ex — fills when the market trades through
 · <a data-cancel="${o.id}">cancel</a></div>`;
-else if(c.act==="HOLD"||c.act==="CHECK")btn=c.closeable?`<button class="small" data-close="1" data-item="${esc(c.item)}" data-qty="${c.qty}">I sold it — log the sale</button>`:"";
+else if(c.act==="HOLD"||c.act==="CHECK"){
+btn=c.closeable?`<button class="small" data-close="1" data-item="${esc(c.item)}" data-qty="${c.qty}">I sold it — log the sale</button>`:"";
+if(c.act==="CHECK")btn+=`<div class="matchbox" style="margin-top:8px"><a data-mtoggle="1">match to a scanned item ▸</a>`
++`<div data-mbox hidden style="margin-top:6px;display:flex;gap:6px"><input data-minput placeholder="type the real item name" autocomplete="off">`
++`<button class="small" data-mgo data-item="${esc(c.item)}">match</button></div></div>`;}
 else{const side=(c.act==="SELL"||c.act==="ABANDON")?"sell":"buy";
 const label=paper?(c.act==="ABANDON"?"Sell now (paper)":"Take it (paper)"):"I did it — log the fill";
 btn=`<button data-take="1" data-id="${esc(c.id)}" data-item="${esc(c.item)}" data-side="${side}"
@@ -209,7 +222,6 @@ $("#orders").querySelectorAll("[data-cancel]").forEach(a=>a.onclick=async()=>{
 await api("/api/void",{id:+a.dataset.cancel,kind:"order"});toast("order cancelled");load()});
 $("#orders").querySelectorAll("[data-obuy]").forEach(b=>b.onclick=()=>orderBought(b.dataset.obuy));
 $("#orders").querySelectorAll("[data-osell]").forEach(b=>b.onclick=()=>orderSold(b.dataset.osell));
-$("#namelist").innerHTML=((D.names)||[]).map(n=>`<option value="${esc(n)}"></option>`).join("");
 FILLS={};(D.fills||[]).forEach(f=>FILLS[f.id]=f);
 $("#trades tbody").innerHTML=(D.fills||[]).map(f=>`<tr><td>${esc(f.ts.slice(5,16).replace("T"," "))}</td>
 <td>${esc(f.item)}</td><td>${f.side}</td><td>${f.qty}</td><td>${f.px}</td>
@@ -297,6 +309,30 @@ $("#record").open=true;updateHint();checkMatch();$("#f_item").scrollIntoView({be
 toast("logging the sale of "+item+" — enter the price you sold at (per unit), then record fill");}
 // name matching: mirror the server's snap so the user sees what their entry binds to
 function jnorm(s){return (s||"").replace(/’/g,"'").toLowerCase().split(/\s+/).filter(Boolean).join(" ")}
+// custom autocomplete (native <datalist> is unreliable): filters D.names, click/Enter to pick
+function acFilter(q){const N=(D&&D.names)||[],v=jnorm(q);
+if(!v)return N.slice(0,15);
+const pre=[],sub=[];for(const n of N){const nn=jnorm(n);if(nn.startsWith(v))pre.push(n);else if(nn.includes(v))sub.push(n);}
+return pre.concat(sub).slice(0,15);}
+function attachAC(input,onPick){
+let box=null,items=[];
+function close(){if(box){box.remove();box=null;items=[];}}
+function show(){const list=acFilter(input.value);close();if(!list.length)return;
+box=document.createElement("div");box.className="acbox";
+const r=input.getBoundingClientRect();box.style.left=r.left+"px";box.style.top=(r.bottom+2)+"px";box.style.minWidth=Math.max(r.width,220)+"px";
+list.forEach(n=>{const d=document.createElement("div");d.className="acitem";d.textContent=n;
+d.onmousedown=e=>{e.preventDefault();input.value=n;close();if(onPick)onPick(n);};box.appendChild(d);});
+items=list;document.body.appendChild(box);}
+input.addEventListener("input",show);
+input.addEventListener("focus",show);
+input.addEventListener("keydown",e=>{if(e.key==="Escape")close();
+else if(e.key==="Enter"&&items.length){e.preventDefault();input.value=items[0];close();if(onPick)onPick(items[0]);}});
+input.addEventListener("blur",()=>setTimeout(close,200));}
+async function renameItem(oldName,newName){newName=(newName||"").trim();
+if(!newName)return toast("type or pick the item to match it to");
+try{const r=await api("/api/rename_item",{old:oldName,new:newName,ledger:D.cfg.mode});
+toast(r.moved?`matched "${oldName}" → "${r.item}" — it'll price now`:`no fills moved (is it spelled the same?)`);load();
+}catch(e){toast("couldn't match: "+e.message)}}
 function checkMatch(){const v=$("#f_item").value,N=(D&&D.names)||[];
 if(!v){$("#f_match").textContent="";return}
 const hit=N.find(n=>jnorm(n)===jnorm(v));
@@ -345,6 +381,7 @@ load();
 }catch(e){toast("couldn't save: "+e.message)}};
 $("#f_cancel").onclick=cancelEdit;
 $("#f_qty").oninput=updateHint;$("#f_px").oninput=updateHint;$("#f_item").oninput=checkMatch;
+attachAC($("#f_item"),checkMatch);
 $("#c_go").onclick=async()=>{try{
 await api("/api/holdings",{div:num($("#c_div").value)||0,ex:num($("#c_ex").value)||0,chaos:num($("#c_chaos").value)||0});
 toast("holdings set — sizing and benchmarks now use your real capital");load();

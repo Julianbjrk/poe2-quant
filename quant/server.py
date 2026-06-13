@@ -137,6 +137,25 @@ def make_handler(io, token):
                     if res.get("ok"):
                         threading.Timer(0.8, update.restart).start()
                     return self._send(200, json.dumps(res))
+                elif path == "/api/rename_item":
+                    # re-key a held position to a scanned item so it can be priced:
+                    # void each fill of the old name, re-append it under the canonical one
+                    names = store.kv_json(c, "item_names") or []
+                    old = body["old"]
+                    new = snap_name(body["new"], names)
+                    ledger = body.get("ledger") or cfg["mode"]
+                    moved = 0
+                    for f in store.fills(c, ledger):
+                        if f["item"] != old:
+                            continue
+                        store.append(c, "fill_void", {"void_id": f["id"], "note": "rematched"})
+                        store.append(c, "fill", {
+                            "ledger": f["ledger"], "item": new, "side": f["side"],
+                            "qty": f["qty"], "px": f["px"], "card_id": f.get("card_id"),
+                            "sig": f.get("sig"), "target_px": f.get("target_px"),
+                            "order_id": f.get("order_id"), "note": f"rematched from {old}"})
+                        moved += 1
+                    out = {"ok": True, "moved": moved, "item": new}
                 elif path == "/api/void":
                     kind = "order_cancel" if body.get("kind") == "order" else "fill_void"
                     store.append(c, kind, {"void_id": int(body["id"]),
