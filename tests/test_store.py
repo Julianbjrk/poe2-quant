@@ -102,6 +102,18 @@ class TestTicks(StoreCase):
         self.assertEqual(len(series["X"]), 1)
 
 
+class TestPredictionsModelFilter(StoreCase):
+    def test_filters_by_model_version(self):
+        c = store.connect(self.path)
+        store.predict_write(c, "p1", "c1", "DIP", "X", {"p_hit": 0.6, "model": "m1"})
+        store.predict_write(c, "p2", "c2", "DIP", "Y", {"p_hit": 0.6, "model": "m2"})
+        store.predict_grade(c, "p1", {"filled": 1, "hit": 1})
+        store.predict_grade(c, "p2", {"filled": 1, "hit": 0})
+        c.commit()
+        self.assertEqual({g["id"] for g in store.predictions_graded(c, 30)}, {"p1", "p2"})
+        self.assertEqual([g["id"] for g in store.predictions_graded(c, 30, model="m2")], ["p2"])
+
+
 class TestArchive(StoreCase):
     def test_prune_archives_old_ticks_then_deletes_keeps_recent(self):
         c = store.connect(self.path)

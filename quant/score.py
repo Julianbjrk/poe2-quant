@@ -33,8 +33,11 @@ def calib_default(adv):
         a, b = adv["hit_prior"].get(sig, [6, 4])
         cal[sig] = {"hit": [float(a), float(b)], "fill": [7.0, 3.0]}
     m, sd, n = adv["rev_frac_prior"]
-    cal["DIP"]["rev"] = [float(m), float(sd) ** 2, float(n)]
-    cal["MAKE"]["spread"] = [adv["spread_capture_prior_pct"], 4.0, 12.0]
+    # Normal posteriors are [mean, var, n, M2] (M2 = sum of squared deviations,
+    # seeded as var*n so the prior acts like n pseudo-observations).
+    cal["DIP"]["rev"] = [float(m), float(sd) ** 2, float(n), float(sd) ** 2 * float(n)]
+    sv = float(adv["spread_capture_prior_pct"])
+    cal["MAKE"]["spread"] = [sv, 4.0, 12.0, 4.0 * 12.0]
     return cal
 
 
@@ -53,12 +56,21 @@ def beta_update(ab, y):
     ab[1] += 1 - y
 
 
-def normal_update(msn, x):
-    """[mean, var, pseudo_n] ← one observation, prior-weighted."""
-    m, v, n = msn
-    msn[0] = (m * n + x) / (n + 1)
-    msn[2] = n + 1
-    msn[1] = max(v * 0.98, 1e-6)  # slowly sharpen; never collapse
+def normal_update(msn, x, n_cap=200.0):
+    """[mean, var, n, M2] ← one observation (Welford). The variance reflects the
+    OBSERVED dispersion, not a decay schedule, so noisy data stays uncertain. n
+    is capped (and M2 forgotten at the cap) so the estimate stays adaptive and
+    M2 can't grow without bound. Tolerates a legacy [mean,var,n] tuple."""
+    if len(msn) == 3:
+        msn.append(msn[1] * max(msn[2], 1.0))   # seed M2 in place
+    m, v, n, M2 = msn
+    n2 = min(n + 1.0, n_cap)
+    delta = x - m
+    m2 = m + delta / n2
+    M2 = M2 + delta * (x - m2)
+    if n + 1.0 > n_cap:                          # at cap: forget ~one obs (sliding window)
+        M2 *= (n_cap - 1.0) / n_cap
+    msn[0], msn[1], msn[2], msn[3] = m2, M2 / max(n2 - 1.0, 1.0), n2, M2
     return msn
 
 
@@ -72,7 +84,13 @@ def calib_apply(calib, sig, pred, out):
     if out.get("filled") and out.get("hit") is not None:
         beta_update(cal["hit"], 1 if out["hit"] else 0)
         if sig == "DIP" and "rev" in cal and pred.get("gap_pct"):
-            frac = clamp((out.get("realized_pct") or 0) / pred["gap_pct"], -1.0, 1.5)
+            # measure reversion from the best favorable move within the horizon
+            # (mfe), not terminal mark-to-last — so a shorter eval horizon does
+            # not bias the reversion fraction downward.
+            num = out.get("mfe_pct")
+            if num is None:
+                num = out.get("realized_pct") or 0
+            frac = clamp(num / pred["gap_pct"], -1.0, 1.5)
             normal_update(cal["rev"], frac)
         if sig == "MAKE" and "spread" in cal and out.get("realized_pct") is not None:
             normal_update(cal["spread"], clamp(out["realized_pct"], -5.0, 15.0))
@@ -114,6 +132,31 @@ def summarize(graded):
             "crps": round(sum(crps_gauss(y, mu, sd) for y, mu, sd in rets) / n_e, 2) if n_e else None,
             "buckets": buckets,
         }
+    return out
+
+
+def model_reliability(graded):
+    """Per-signal: the model's own probability (p_model) bucketed against the
+    realized hit frequency. The displayed odds are the pooled calibrated rate
+    (one number per signal), so this is the diagnostic that reveals whether the
+    model adds per-card resolution — i.e. whether higher p_model really does mean
+    higher hit rate. If it does (monotone), a per-card model tilt becomes worth
+    reintroducing; until then we keep the honest pooled rate. Pure; no DB."""
+    out = {}
+    for sig in SIGS:
+        rows = [(g["pred"].get("p_model"), 1 if g["out"].get("hit") else 0)
+                for g in graded if g["sig"] == sig
+                and g["out"].get("filled") and g["pred"].get("p_model") is not None]
+        if not rows:
+            continue
+        buckets = []
+        for lo, hi in ((0.0, 0.4), (0.4, 0.6), (0.6, 0.8), (0.8, 1.01)):
+            sel = [(p, y) for p, y in rows if lo <= p < hi]
+            if sel:
+                buckets.append({"lo": lo, "hi": min(hi, 1.0), "n": len(sel),
+                                "p_mean": round(sum(p for p, _ in sel) / len(sel), 2),
+                                "freq": round(sum(y for _, y in sel) / len(sel), 2)})
+        out[sig] = {"n": len(rows), "buckets": buckets}
     return out
 
 

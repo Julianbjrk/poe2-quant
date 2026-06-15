@@ -82,6 +82,21 @@ class TestOU(unittest.TestCase):
         self.assertAlmostEqual(ou["b"], b, delta=0.06)
         self.assertAlmostEqual(ou["theta"], theta, delta=0.01)
 
+    def test_ignores_time_gaps(self):
+        # bars spaced 3h apart (an offline gap) must NOT be read as 1h reversion
+        # steps; with no contiguous pairs, b falls back to the prior.
+        from quant.models import B_PRIOR
+        random.seed(5)
+        b, theta, sig = 0.9, math.log(100), 0.01
+        x, closes = theta, []
+        for i in range(40):
+            x = theta + b * (x - theta) + random.gauss(0, sig)
+            h = i * 3                      # every bar 3 hours apart → 0 contiguous pairs
+            closes.append((f"2026-06-{h // 24 + 1:02d}T{h % 24:02d}:00:00+00:00", math.exp(x)))
+        ou = fit_ou(closes)
+        self.assertAlmostEqual(ou["b"], B_PRIOR, places=6)
+        self.assertEqual(ou["n"], 40)       # all observations still feed theta/sd
+
     def test_horizon_reverts_toward_mean(self):
         ou = {"theta": math.log(100), "b": 0.9, "sd_st": 0.05, "sig_h": 0.02}
         mu, sd = ou_horizon(math.log(88), ou, 24, rev_frac=1.0)

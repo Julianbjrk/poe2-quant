@@ -201,6 +201,85 @@ class TestEngine(unittest.TestCase):
         self.assertIn("league-history", dips[0]["why"])
         self.assertIn("set", dips[0]["head"])
 
+    def test_predictions_carry_p_model(self):
+        import quant.engine as eng
+        self.play_script(dip_script())
+        c = store.connect(self.db)
+        rows = c.execute("SELECT payload FROM predictions").fetchall()
+        c.close()
+        self.assertTrue(rows)
+        import json
+        pl = json.loads(rows[0][0])
+        self.assertIn("p_hit", pl)
+        self.assertIn("p_model", pl)              # the reliability diagnostic
+        self.assertEqual(pl["model"], eng.MODEL_V)
+
+    def test_shadow_grades_at_horizon_with_mfe(self):
+        # a position that never touches its target grades MISS at H_h (not the
+        # 96h backstop), and the reversion is measured from max favorable
+        # excursion within the horizon — not terminal mark-to-last.
+        import json
+        import quant.engine as eng
+        from quant.engine import shadow_process
+        c = store.connect(self.db)
+        cache = {}
+        t0 = datetime(2026, 6, 10, tzinfo=timezone.utc)
+        iso = lambda h: (t0 + timedelta(hours=h)).isoformat(timespec="seconds")
+        for h, px in [(0, 100.), (1, 101.), (2, 104.), (3, 102.), (4, 101.), (5, 100.5), (6, 100.)]:
+            store.insert_ticks(c, iso(h), [("Zed Orb", "ninja", px, 100)], cache)
+        store.predict_write(c, "p:z", "z", "DIP", "Zed Orb",
+                            {"p_hit": 0.6, "p_model": 0.6, "H_h": 6.0, "gap_pct": 10.0,
+                             "entry": 100.0, "target": 110.0, "model": eng.MODEL_V})
+        c.commit()
+        shadow = {"orders": [], "pos": [{"pid": "p:z", "sig": "DIP", "item": "Zed Orb",
+                  "px": 100.0, "target": 110.0, "qty": 1, "H_h": 6.0, "entry_ts": iso(0)}]}
+        calib = calib_default(self.cfg["adv"])
+        shadow_process(c, shadow, iso(5), self.cfg["adv"], calib)   # within H_h → still open
+        self.assertEqual(len(shadow["pos"]), 1)
+        shadow_process(c, shadow, iso(7), self.cfg["adv"], calib)   # past H_h → graded miss
+        self.assertEqual(shadow["pos"], [])
+        o = json.loads(c.execute("SELECT outcome FROM predictions WHERE id='p:z'").fetchone()[0])
+        self.assertEqual(o["hit"], 0)
+        self.assertAlmostEqual(o["mfe_pct"], 4.0, delta=0.5)        # 104/100-1 = +4%
+        c.close()
+
+    def test_model_bump_resets_and_guards_calibration(self):
+        # the migration: a forecast-math change (MODEL_V) must archive + reset the
+        # posteriors and gates, re-seed DIP from the last bootstrap, and NOT let
+        # an old-definition outcome graded during the bump poll contaminate them.
+        import quant.engine as eng
+        OLD = "m_pre"
+        c = store.connect(self.db)
+        old_calib = calib_default(self.cfg["adv"])
+        old_calib["DIP"]["hit"] = [20.0, 5.0]
+        store.kv_set_json(c, "calib", old_calib)
+        store.kv_set(c, "calib_model", OLD)
+        store.kv_set_json(c, "gates", {"MAKE": {"off": True, "n": 30}})
+        store.kv_set_json(c, "calib_boot", {"events": 40, "hit_rate": 0.7, "rev_mean": 0.85})
+        store.predict_write(c, "p:old", "old", "DIP", "Alpha Orb",
+                            {"p_hit": 0.6, "p_model": 0.6, "H_h": 6.0, "gap_pct": 5.0,
+                             "entry": 50.0, "target": 99.0, "model": OLD})
+        stale = (self.io.t - timedelta(hours=99)).isoformat(timespec="seconds")
+        store.kv_set_json(c, "shadow", {"orders": [], "pos": [
+            {"pid": "p:old", "sig": "DIP", "item": "Alpha Orb", "px": 50.0,
+             "target": 99.0, "qty": 1, "H_h": 6.0, "entry_ts": stale}]})
+        c.commit()
+        c.close()
+        self.assertNotEqual(eng.MODEL_V, OLD)
+        self.run_poll()                                  # triggers the migration
+        c = store.connect(self.db)
+        self.assertEqual(store.kv_get(c, "calib_model"), eng.MODEL_V)
+        self.assertEqual(store.kv_json(c, "calib_archive:" + OLD)["DIP"]["hit"], [20.0, 5.0])
+        self.assertEqual(store.kv_json(c, "gates"), {})
+        calib = store.kv_json(c, "calib")
+        # DIP re-seeded from calib_boot (0.7), NOT the archived [20,5] and NOT
+        # bumped by the m1 outcome graded this poll (contamination guard).
+        self.assertAlmostEqual(calib["DIP"]["hit"][0] / sum(calib["DIP"]["hit"]), 0.7, delta=0.07)
+        self.assertAlmostEqual(sum(calib["DIP"]["hit"]), 22.0, delta=0.5)  # 20 pseudo + Laplace
+        closed = c.execute("SELECT outcome FROM predictions WHERE id='p:old'").fetchone()[0]
+        self.assertIsNotNone(closed)                     # row still closed
+        c.close()
+
     def test_unfilled_entry_expires_and_grades_fill_forecast(self):
         snap = self.play_script(dip_script())
         self.assertTrue([c for c in snap["cards"] if c["act"] == "DIP"])

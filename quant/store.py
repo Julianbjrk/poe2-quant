@@ -348,11 +348,16 @@ def predict_grade(c, pid, outcome, ts=None):
               (json.dumps(outcome), ts or now_iso(), pid))
 
 
-def predictions_graded(c, since_days=30):
-    rows = c.execute(
-        "SELECT id, ts, card_id, sig, item, payload, outcome FROM predictions "
-        "WHERE outcome IS NOT NULL AND graded_ts >= datetime('now', ?) ORDER BY ts",
-        (f"-{int(since_days)} days",)).fetchall()
+def predictions_graded(c, since_days=30, model=None):
+    """Graded predictions in the window. `model` filters to one MODEL_V so
+    reliability stats never mix across a forecast-math change."""
+    q = ("SELECT id, ts, card_id, sig, item, payload, outcome FROM predictions "
+         "WHERE outcome IS NOT NULL AND graded_ts >= datetime('now', ?)")
+    args = [f"-{int(since_days)} days"]
+    if model is not None:
+        q += " AND json_extract(payload, '$.model') = ?"
+        args.append(model)
+    rows = c.execute(q + " ORDER BY ts", args).fetchall()
     return [{"id": i, "ts": ts, "card_id": cid, "sig": s, "item": it,
              "pred": json.loads(p), "out": json.loads(o)} for i, ts, cid, s, it, p, o in rows]
 

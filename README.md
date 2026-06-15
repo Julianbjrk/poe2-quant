@@ -99,6 +99,16 @@ magic constants (reversion fraction, spread capture, hit rates), and signals who
 can't clear zero are **auto-gated off, visibly,** while they keep shadow-trading to earn their way
 back. *NO EDGE is a finding, the way NO TRADE is advice.*
 
+The odds a card shows are the **empirically-measured** frequency of exactly the event the shadow
+book grades — a first-passage touch of the target within the forecast's own horizon — so they
+match reality by construction and self-correct as outcomes accrue. The model's own estimate is kept
+as a diagnostic (`p_model`, in Engine room → reliability) so it's possible to tell whether the model
+adds per-card information beyond the pooled rate. (**Upgrading to v1.2 / model `m2`:** because that
+release redefined the graded event, the per-signal calibration and the auto-gates **reset once** on
+first run — they were measured under the old definition; your trade ledger, paper track record, and
+the full prediction history are preserved. DIP re-seeds from your last `--bootstrap` automatically;
+re-run `python quant.py --bootstrap` if you want to refresh it.)
+
 **Paper mode is the default** and uses the same honest fill engine (no instant-fill fiction). The
 settings panel shows a **graduation rule**: the app recommends real mode only when ≥14 days of
 paper alpha clear a t-test against the worst benchmark. It will tell you when it has earned it.

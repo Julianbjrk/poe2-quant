@@ -15,7 +15,7 @@ from .models import (best_ratio, daily_anchor, fee_pct, fit_ou, kf_drift_z,
                      kf_level, kf_new, kf_sd, kf_sig_h, kf_step, median,
                      weighted_median)
 from .score import (beta_mean, beta_sd, calib_apply, calib_default, graduation,
-                    summarize, today, trust_line, update_gates)
+                    model_reliability, summarize, today, trust_line, update_gates)
 from .util import (best_match, clamp, fmt_dur_h, fmt_ex, fmt_money, fmt_p,
                    fmt_pct, fmt_signed_ex, hours_between, now_iso)
 from .signals import propose_all
@@ -58,7 +58,7 @@ def size_card(p, calib, adv, preset, bankroll_ex, deployable_ex, family_spent, r
     b = p["gain_pct"] / max(p["loss_pct"], 0.25)
     p_star = 1.0 / (1.0 + b)  # breakeven win prob
     from .util import Phi
-    p_conf = Phi((beta_mean(hit) * 0 + p["p_hit"] - p_star) / max(p_sd, 1e-3))
+    p_conf = Phi((p["p_hit"] - p_star) / max(p_sd, 1e-3))
     if p_conf < preset["p_edge_min"]:
         return None, (f"only {fmt_p(p_conf)} confident it beats break-even "
                       f"(needs {fmt_p(preset['p_edge_min'])})")
@@ -161,6 +161,34 @@ def exit_card(item, st, row, adv, rate):
             "why": f"net of fees this needs {fmt_ex(target)} ex; no trigger yet"}
 
 
+# ------------------------------------------------------ calibration load ---
+def _load_calib_versioned(c, adv):
+    """Load calibration; if the stored MODEL_V differs from the current one the
+    graded-event definition changed, so old posteriors aren't comparable:
+    archive them, re-init from priors (re-seeding DIP from the last bootstrap if
+    present, bypassing its graded-count guard), and reset gates so every signal
+    can earn its way back. Returns (calib, gates)."""
+    stored = store.kv_get(c, "calib_model")
+    calib = store.kv_json(c, "calib")
+    if calib is not None and stored == MODEL_V:
+        return calib, store.kv_json(c, "gates", {})
+    if calib is not None:
+        store.kv_set_json(c, "calib_archive:" + (stored or "unknown"), calib)
+    calib = calib_default(adv)
+    boot = store.kv_json(c, "calib_boot")
+    if boot and boot.get("events") and boot.get("hit_rate") is not None:
+        from .bootstrap import PSEUDO_N_CAP
+        n0 = min(PSEUDO_N_CAP, max(boot["events"] // 2, 4))
+        calib["DIP"]["hit"] = [round(boot["hit_rate"] * n0 + 1, 2),
+                               round((1 - boot["hit_rate"]) * n0 + 1, 2)]
+        rm = clamp(boot.get("rev_mean") or 0.7, 0.2, 1.2)
+        calib["DIP"]["rev"] = [rm, 0.02, float(n0), 0.02 * float(n0)]
+    store.kv_set_json(c, "calib", calib)
+    store.kv_set(c, "calib_model", MODEL_V)
+    store.kv_set_json(c, "gates", {})
+    return calib, {}
+
+
 # -------------------------------------------------------------- shadow -----
 def shadow_process(c, shadow, ts, adv, calib):
     """Fill resting shadow orders on trade-through; close positions on target,
@@ -179,38 +207,51 @@ def shadow_process(c, shadow, ts, adv, calib):
                 return t
         return None
 
+    def grade(pid, sig, out):
+        # close the ledger row always; only feed posteriors graded under the
+        # CURRENT forecast definition (skip stale-MODEL_V outcomes).
+        pred = store.prediction_open(c, pid)
+        if pred:
+            store.predict_grade(c, pid, out, ts)
+            if pred.get("model") == MODEL_V:
+                calib_apply(calib, sig, pred, out)
+
     for o in shadow["orders"]:
         t_fill = crossed(o["item"], o["ts"], o["px"], "buy")
         if t_fill:
             opened.append({**o, "entry_ts": t_fill})
         elif hours_between(o["ts"], ts) > adv["fill_window_h"]:
-            pred = store.prediction_open(c, o["pid"])
-            if pred:
-                out = {"filled": 0}
-                store.predict_grade(c, o["pid"], out, ts)
-                calib_apply(calib, o["sig"], pred, out)
+            grade(o["pid"], o["sig"], {"filled": 0})
         else:
             keep_o.append(o)
     shadow["orders"] = keep_o
     keep_p = []
     for p in shadow["pos"] + opened:
         fees = 2 * fee_pct(p["px"] * p.get("qty", 1), adv["fee_curve"]) + adv["slippage_pct"]
+        # the forecast horizon IS the evaluation horizon: a touch counts only
+        # within H_h (max_hold_h is an absolute backstop), so the graded event
+        # matches what the card's odds claim.
+        hz = min(p.get("H_h", adv["max_hold_h"]), adv["max_hold_h"])
         t_hit = crossed(p["item"], p["entry_ts"], p["target"], "sell") if p.get("target") else None
-        timeout = hours_between(p["entry_ts"], ts) > adv["max_hold_h"]
-        if t_hit or timeout:
-            if t_hit:
+        hit_in_window = bool(t_hit) and hours_between(p["entry_ts"], t_hit) <= hz
+        timeout = hours_between(p["entry_ts"], ts) > hz
+        if hit_in_window or timeout:
+            # max favorable excursion within the horizon (gross) — the honest
+            # reversion measurement, independent of the hit/timeout window.
+            favs = [px for t, src, px in series.get(p["item"], [])
+                    if src == "ninja" and t > p["entry_ts"]
+                    and hours_between(p["entry_ts"], t) <= hz]
+            mfe_pct = round((max(favs) / p["px"] - 1) * 100, 2) if favs else 0.0
+            if hit_in_window:
                 realized = (p["target"] / p["px"] - 1) * 100 - fees
                 out = {"filled": 1, "hit": 1, "realized_pct": round(realized, 2),
-                       "t_hit_h": round(hours_between(p["entry_ts"], t_hit), 1)}
+                       "mfe_pct": mfe_pct, "t_hit_h": round(hours_between(p["entry_ts"], t_hit), 1)}
             else:
                 last = [x for x in series.get(p["item"], []) if x[1] == "ninja"]
                 mark = last[-1][2] if last else p["px"]
                 realized = (mark / p["px"] - 1) * 100 - fees
-                out = {"filled": 1, "hit": 0, "realized_pct": round(realized, 2)}
-            pred = store.prediction_open(c, p["pid"])
-            if pred:
-                store.predict_grade(c, p["pid"], out, ts)
-                calib_apply(calib, p["sig"], pred, out)
+                out = {"filled": 1, "hit": 0, "realized_pct": round(realized, 2), "mfe_pct": mfe_pct}
+            grade(p["pid"], p["sig"], out)
         else:
             keep_p.append(p)
     shadow["pos"] = keep_p
@@ -376,8 +417,7 @@ def _poll(cfg, io, db_path, store_snap):
     circuit = abs(market_z) >= adv["circuit_z"]
 
     # ---- calibration + proposals ----------------------------------------
-    calib = store.kv_json(c, "calib") or calib_default(adv)
-    gates = store.kv_json(c, "gates", {})
+    calib, gates = _load_calib_versioned(c, adv)
     vol_floor = adv["min_volume_div_day"] * preset["vol_floor_x"]
     cand_rows = {nm: r for nm, r in rows.items() if nm not in MAJORS}
     props = propose_all(cand_rows, routes, adv["recipes"], calib, adv, vol_floor)
@@ -397,7 +437,7 @@ def _poll(cfg, io, db_path, store_snap):
             p_hit = beta_mean(calib["PIN"]["hit"])
             props.insert(0, {"sig": "PIN", "item": nm, "family": r["family"],
                              "entry_px": r["px"], "target_px": tgt, "p_fill": 0.9,
-                             "fill_h": 1.0, "p_hit": p_hit, "H_h": 48.0,
+                             "fill_h": 1.0, "p_hit": p_hit, "p_model": p_hit, "H_h": 48.0,
                              "gain_pct": gain, "loss_pct": max(gain / 2, 3.0),
                              "ev_pct": p_hit * gain - (1 - p_hit) * max(gain / 2, 3.0),
                              "ret_mu": gain * p_hit, "ret_sd": max(gain, 4.0),
@@ -523,7 +563,8 @@ def _poll(cfg, io, db_path, store_snap):
         pid = "p:" + cs["id"]
         store.predict_write(c, pid, cs["id"], p["sig"], p["item"], {
             "p_fill": round(p["p_fill"], 3), "fill_h": round(p["fill_h"], 1),
-            "p_hit": round(p["p_hit"], 3), "H_h": p["H_h"],
+            "p_hit": round(p["p_hit"], 3), "p_model": round(p.get("p_model", p["p_hit"]), 3),
+            "H_h": p["H_h"],
             "ret_mu": round(p["ret_mu"], 2), "ret_sd": round(p["ret_sd"], 2),
             "entry": p["entry_px"], "target": p.get("target_px"),
             "gap_pct": p.get("gap_pct"), "model": MODEL_V,
@@ -531,11 +572,12 @@ def _poll(cfg, io, db_path, store_snap):
         shadow["orders"].append({"pid": pid, "card_id": cs["id"], "sig": p["sig"],
                                  "item": p["item"], "px": p["entry_px"],
                                  "target": p.get("target_px"), "qty": cs["size"]["qty"],
-                                 "ts": ts})
+                                 "H_h": p["H_h"], "ts": ts})
     if store_snap:
         shadow_process(c, shadow, ts, adv, calib)
     store.kv_set_json(c, "shadow", shadow)
     store.kv_set_json(c, "calib", calib)
+    store.kv_set(c, "calib_model", MODEL_V)
 
     # ---- paper resting orders: fill on trade-through ----------------------
     if store_snap:
@@ -551,9 +593,10 @@ def _poll(cfg, io, db_path, store_snap):
                                          "target_px": o.get("target_px"),
                                          "note": "paper order filled on trade-through"}, t_fill)
 
-    # ---- grading-derived views -------------------------------------------
-    graded30 = store.predictions_graded(c, 30)
+    # ---- grading-derived views (current MODEL_V only, never mix definitions)
+    graded30 = store.predictions_graded(c, 30, model=MODEL_V)
     summary = summarize(graded30)
+    reliability = model_reliability(graded30)
     gates = update_gates(gates, summary, adv)
     store.kv_set_json(c, "gates", gates)
 
@@ -620,7 +663,7 @@ def _poll(cfg, io, db_path, store_snap):
         "scan": [{k: p[k] for k in ("sig", "item", "ev_pct", "p_hit", "vol_div")}
                  | {"ev_pct": round(p["ev_pct"], 1), "p_hit": round(p["p_hit"], 2),
                     "vol_div": round(p["vol_div"] or 0)} for p in props[:12]],
-        "gates": gates, "scoreboard": summary,
+        "gates": gates, "scoreboard": summary, "reliability": reliability,
         "port": {**{k: v for k, v in port.items() if k != "positions"},
                  "deltas": deltas, "bench": bench,
                  "positions": [{"item": i, **{k: round(v, 3) if isinstance(v, float) else v

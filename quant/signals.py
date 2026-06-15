@@ -26,6 +26,7 @@ def _ret_sd(p, gain, loss):
 def dip(row, calib, adv):
     ou = row.get("ou")
     fees = _fees_rt(row["lvl_ex"], 1, adv)
+    p_model = None   # the model's own probability, kept as a reliability diagnostic
     if ou and ou["n"] >= 24:
         z = (row["lvl"] - ou["theta"]) / ou["sd_st"]
         if z > -adv["dip_z"] or row["idio_z"] > -adv["idio_z"]:
@@ -44,7 +45,11 @@ def dip(row, calib, adv):
         target = math.exp(t_ln)
         if target <= entry * 1.005:
             return None
-        p_hit = clamp(prob_ge(mu_H, sd_H, t_ln), 0.05, 0.92)
+        # show/size on the empirically-calibrated rate (graded as first-passage
+        # touch within H, so the odds match reality by construction); keep the
+        # model's own marginal as the p_model diagnostic.
+        p_hit = clamp(beta_mean(calib["DIP"]["hit"]), 0.05, 0.92)
+        p_model = clamp(prob_ge(mu_H, sd_H, t_ln), 0.05, 0.92)
         miss_px = math.exp(below_mean(mu_H, sd_H, t_ln))
         gain = (target / entry - 1) * 100 - fees
         loss = max((1 - miss_px / entry) * 100 + fees, 0.5)
@@ -97,12 +102,15 @@ def dip(row, calib, adv):
         gap_pct = (target / entry - 1) * 100
     else:
         return None
+    if p_model is None:
+        p_model = p_hit
     ev = p_hit * gain - (1 - p_hit) * loss
     return {"sig": "DIP", "item": row["item"], "family": row["family"],
             "entry_px": entry, "target_px": target,
             "p_fill": touch_prob(dist + 1e-4, row["sig_h"], adv["fill_window_h"]),
             "fill_h": max(touch_median_h(dist + 1e-4, row["sig_h"]), 0.3),
-            "p_hit": p_hit, "H_h": H, "gain_pct": gain, "loss_pct": loss, "ev_pct": ev,
+            "p_hit": p_hit, "p_model": p_model, "H_h": H, "gain_pct": gain,
+            "loss_pct": loss, "ev_pct": ev,
             "ret_mu": ev, "ret_sd": _ret_sd(p_hit, gain, loss), "gap_pct": gap_pct,
             "vol_div": row["vol_div"], "why": why, "det": det, "deterministic": False}
 
@@ -125,7 +133,7 @@ def make(row, calib, adv):
             "entry_px": bid, "target_px": ask,
             "p_fill": touch_prob(dist, row["sig_h"], adv["fill_window_h"] * 2),
             "fill_h": touch_median_h(dist, row["sig_h"]),
-            "p_hit": p_cycle, "H_h": float(adv["horizon_h"]["MAKE"]),
+            "p_hit": p_cycle, "p_model": p_cycle, "H_h": float(adv["horizon_h"]["MAKE"]),
             "gain_pct": gain, "loss_pct": loss, "ev_pct": ev,
             "ret_mu": ev, "ret_sd": _ret_sd(p_cycle, gain, loss),
             "vol_div": row["vol_div"],
@@ -168,7 +176,7 @@ def route(item, rts, row, calib, adv):
     return {"sig": "ROUTE", "item": item, "family": (row or {}).get("family", "route"),
             "entry_px": cheap[1]["px_ex"], "target_px": rich[1]["px_ex"],
             "p_fill": touch_prob(1e-4, sig_h, adv["fill_window_h"]), "fill_h": 1.0,
-            "p_hit": p_hit, "H_h": float(adv["horizon_h"]["ROUTE"]),
+            "p_hit": p_hit, "p_model": p_hit, "H_h": float(adv["horizon_h"]["ROUTE"]),
             "gain_pct": gain, "loss_pct": loss, "ev_pct": ev,
             "ret_mu": ev, "ret_sd": _ret_sd(p_hit, gain, loss),
             "vol_div": (row or {}).get("vol_div") or min(cheap[1]["value_ex"], rich[1]["value_ex"]) / 12,
@@ -211,7 +219,7 @@ def parity(recipes, px_map, vol_map, calib, adv):
         vol = min(vol_map.get(give_nm) or 0, vol_map.get(get_nm) or 0)
         out.append({"sig": "PARITY", "item": give_nm, "family": "parity",
                     "entry_px": px_map[give_nm], "target_px": None,
-                    "p_fill": 0.85, "fill_h": 1.0, "p_hit": p_hit,
+                    "p_fill": 0.85, "fill_h": 1.0, "p_hit": p_hit, "p_model": p_hit,
                     "H_h": float(adv["horizon_h"]["PARITY"]),
                     "gain_pct": edge, "loss_pct": loss, "ev_pct": ev,
                     "ret_mu": ev, "ret_sd": _ret_sd(p_hit, edge, loss),

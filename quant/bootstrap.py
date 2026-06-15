@@ -132,7 +132,7 @@ def apply_priors(c, res, adv, log=print):
     # +1/+1 Laplace smoothing: history is never allowed to claim certainty
     cal["DIP"]["hit"] = [round(res["hit_rate"] * n0 + 1, 2),
                          round((1 - res["hit_rate"]) * n0 + 1, 2)]
-    cal["DIP"]["rev"] = [clamp(res["rev_mean"], 0.2, 1.2), 0.02, float(n0)]
+    cal["DIP"]["rev"] = [clamp(res["rev_mean"], 0.2, 1.2), 0.02, float(n0), 0.02 * float(n0)]
     store.kv_set_json(c, "calib", cal)
     c.commit()
     log(f"  DIP priors set from history: hit {res['hit_rate']:.0%} "

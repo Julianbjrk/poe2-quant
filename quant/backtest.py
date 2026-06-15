@@ -77,7 +77,8 @@ def run(cfg, db_path=None, max_polls=None, quiet=False):
             if now is not None and p.get("target") and now >= p["target"]:
                 closed.append({**p, "filled": 1, "hit": 1,
                                "ret": (p["target"] / p["px"] - 1) * 100 - 3})
-            elif hours_between(p["entry_ts"], ts) > adv["max_hold_h"]:
+            elif hours_between(p["entry_ts"], ts) > min(p.get("H_h", adv["max_hold_h"]),
+                                                        adv["max_hold_h"]):
                 mark = now or p["px"]
                 closed.append({**p, "filled": 1, "hit": 0,
                                "ret": (mark / p["px"] - 1) * 100 - 3})
@@ -108,7 +109,8 @@ def run(cfg, db_path=None, max_polls=None, quiet=False):
                 continue
             open_orders.append({"item": prop["item"], "sig": prop["sig"],
                                 "px": prop["entry_px"], "target": prop.get("target_px"),
-                                "ts": ts, "p_hit": prop["p_hit"]})
+                                "ts": ts, "p_hit": prop["p_hit"],
+                                "H_h": prop.get("H_h", adv["max_hold_h"])})
             held.add(prop["item"])
     # persistence baseline: same entries, closed at final price, no model exits
     final_px = {item: px for (item, source), px in polls[stamps[-1]].items() if source == "ninja"}

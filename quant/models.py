@@ -15,6 +15,7 @@
   lot-size guard, principled this time.
 """
 import math
+from datetime import datetime
 
 from .util import Phi, clamp
 
@@ -92,26 +93,39 @@ def fit_ou(closes):
     Anchor (theta) is the MEDIAN of the window — the AR(1) intercept
     extrapolates trends and lands outside the data, which silently kills dip
     detection. The AR coefficient only sets reversion speed; deviation spread
-    is measured directly around the anchor."""
-    xs = [math.log(p) for _, p in closes if p and p > 0]
-    if len(xs) < 8:
+    is measured directly around the anchor. Only CONTIGUOUS (1h-apart) bar
+    pairs feed the reversion estimate, so a sleep/offline gap isn't mistaken
+    for one hour of reversion."""
+    pts = [(h, math.log(p)) for h, p in closes if p and p > 0]
+    if len(pts) < 8:
         return None
+    xs = [x for _, x in pts]
     s = sorted(xs)
     m = len(s) // 2
     theta = s[m] if len(s) % 2 else 0.5 * (s[m - 1] + s[m])
-    pairs = list(zip(xs, xs[1:]))
-    n = len(pairs)
-    mx = sum(p[0] for p in pairs) / n
-    my = sum(p[1] for p in pairs) / n
-    vx = sum((p[0] - mx) ** 2 for p in pairs) / n
-    cxy = sum((p[0] - mx) * (p[1] - my) for p in pairs) / n
-    b_hat = clamp(cxy / vx if vx > 1e-12 else B_PRIOR, 0.5, 0.999)
-    b = (n * b_hat + N_PRIOR * B_PRIOR) / (n + N_PRIOR)
+    pairs = []
+    for (h0, x0), (h1, x1) in zip(pts, pts[1:]):
+        try:
+            dt = (datetime.fromisoformat(h1) - datetime.fromisoformat(h0)).total_seconds() / 3600.0
+        except Exception:
+            dt = 1.0
+        if 0.5 <= dt <= 1.5:          # contiguous hourly step only
+            pairs.append((x0, x1))
+    if len(pairs) >= 5:
+        n = len(pairs)
+        mx = sum(p[0] for p in pairs) / n
+        my = sum(p[1] for p in pairs) / n
+        vx = sum((p[0] - mx) ** 2 for p in pairs) / n
+        cxy = sum((p[0] - mx) * (p[1] - my) for p in pairs) / n
+        b_hat = clamp(cxy / vx if vx > 1e-12 else B_PRIOR, 0.5, 0.999)
+        b = (n * b_hat + N_PRIOR * B_PRIOR) / (n + N_PRIOR)
+    else:
+        b = B_PRIOR               # too few contiguous pairs to estimate reversion
     dev2 = sum((x - theta) ** 2 for x in xs) / len(xs)
     sd_st = math.sqrt(max(dev2, 1e-8))
     return {"theta": theta, "b": b,
             "sig_h": sd_st * math.sqrt(max(1 - b * b, 1e-4)),
-            "sd_st": sd_st, "n": n}
+            "sd_st": sd_st, "n": len(xs)}
 
 
 def ou_horizon(x0, ou, H_h, rev_frac=1.0):

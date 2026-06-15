@@ -3,7 +3,8 @@ import unittest
 
 from quant.config import ADVANCED_DEFAULTS as ADV
 from quant.score import (brier, calib_apply, calib_default, crps_gauss,
-                         graduation, summarize, update_gates)
+                         graduation, model_reliability, normal_update,
+                         summarize, update_gates)
 
 
 class TestScores(unittest.TestCase):
@@ -33,6 +34,51 @@ class TestCalibration(unittest.TestCase):
         hit_before = list(cal["DIP"]["hit"])
         calib_apply(cal, "DIP", {}, {"filled": 0})
         self.assertEqual(cal["DIP"]["hit"], hit_before)
+
+    def test_rev_prefers_mfe_over_realized(self):
+        # a non-hit that nonetheless reverted a lot (high MFE) must still lift the
+        # reversion fraction — the bug the shorter horizon would otherwise cause.
+        cal = calib_default(ADV)
+        pred = {"gap_pct": 10.0}
+        for _ in range(8):
+            calib_apply(cal, "DIP", pred,
+                        {"filled": 1, "hit": 0, "realized_pct": -2.0, "mfe_pct": 9.0})
+        self.assertGreater(cal["DIP"]["rev"][0], 0.75)   # MFE 9/10 pulls it up
+
+
+class TestWelford(unittest.TestCase):
+    def test_variance_reflects_dispersion_not_decay(self):
+        # noisy data must keep the variance HIGH (the old *0.98 decay collapsed it
+        # toward the floor regardless of the data — false confidence).
+        msn = [0.5, 0.04, 12.0, 0.04 * 12]
+        for i in range(60):
+            normal_update(msn, 0.5 + (0.4 if i % 2 else -0.4))   # ±0.4 alternating
+        self.assertGreater(msn[1], 0.05)                  # variance stays near 0.16, not ~0
+
+    def test_n_caps(self):
+        msn = [0.7, 0.02, 12.0, 0.24]
+        for _ in range(500):
+            normal_update(msn, 0.7, n_cap=200.0)
+        self.assertLessEqual(msn[2], 200.0)
+
+    def test_tolerates_legacy_triple(self):
+        msn = [0.7, 0.02, 12.0]            # old 3-tuple
+        normal_update(msn, 0.9)
+        self.assertEqual(len(msn), 4)      # M2 seeded in place
+
+
+class TestReliability(unittest.TestCase):
+    def test_buckets_model_prob_vs_realized(self):
+        graded = []
+        for p, y in [(0.3, 0), (0.35, 0), (0.7, 1), (0.75, 1), (0.85, 1)]:
+            graded.append({"sig": "DIP", "pred": {"p_model": p},
+                           "out": {"filled": 1, "hit": y}})
+        rel = model_reliability(graded)
+        self.assertEqual(rel["DIP"]["n"], 5)
+        # low-p_model bucket should show low realized freq, high bucket high freq
+        lo = [b for b in rel["DIP"]["buckets"] if b["hi"] <= 0.4][0]
+        hi = [b for b in rel["DIP"]["buckets"] if b["lo"] >= 0.6][0]
+        self.assertLess(lo["freq"], hi["freq"])
 
 
 def _graded(sig, n, edge):
