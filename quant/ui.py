@@ -95,7 +95,9 @@ svg{display:block;width:100%;height:60px;margin-top:8px}
 <svg id="spark"></svg><div class="k">net worth, current mode</div></section>
 <section><h2>Signals — measured, not assumed</h2><table id="sigs"><thead>
 <tr><th>signal</th><th>graded</th><th>hit pred→real</th><th>avg edge</th><th>state</th></tr></thead><tbody></tbody></table>
-<div class="k" id="gatenote" style="margin-top:6px">gated signals keep shadow-trading; they earn their way back with evidence</div></section>
+<div class="k" id="gatenote" style="margin-top:6px">gated signals keep shadow-trading; they earn their way back with evidence</div>
+<div id="relwrap" hidden style="margin-top:10px"><div class="k">model reliability — does a higher model estimate actually mean a higher hit rate?</div>
+<table id="rel"><thead><tr><th>signal</th><th>model band</th><th>n</th><th>est</th><th>real</th></tr></thead><tbody></tbody></table></div></section>
 <section><h2>Top candidates this poll</h2><table id="scan"><thead>
 <tr><th>item</th><th>sig</th><th>EV %</th><th>P(hit)</th><th>vol div/d</th></tr></thead><tbody></tbody></section>
 <section><h2>Pinned theses</h2><table id="pins"><tbody></tbody></table></section>
@@ -251,6 +253,11 @@ $("#sigs tbody").innerHTML=Object.entries(sb).map(([k,v])=>`<tr><td>${k}</td><td
 ||"<tr><td colspan=5 class='k'>no graded forecasts yet — the shadow book is collecting them</td></tr>";
 $("#trustdetail").innerHTML=dett(Object.fromEntries(Object.entries(sb).map(([k,v])=>
 [k,`n=${v.n} fill ${v.fill_freq??"—"} hit ${v.hit_freq??"—"} edge ${v.edge_mean_pct??"—"}% crps ${v.crps??"—"}`])));
+const rel=s.reliability||{};const relRows=[];
+Object.entries(rel).forEach(([k,v])=>(v.buckets||[]).forEach(b=>relRows.push(
+`<tr><td>${k}</td><td>${b.lo}–${b.hi}</td><td>${b.n}</td><td>${b.p_mean}</td><td class="${cls((b.freq-b.p_mean))}">${b.freq}</td></tr>`)));
+$("#relwrap").hidden=!relRows.length;
+$("#rel tbody").innerHTML=relRows.join("");
 $("#scan tbody").innerHTML=(s.scan||[]).map(r=>`<tr><td>${esc(r.item)}</td><td>${r.sig}</td>
 <td>${r.ev_pct}</td><td>${r.p_hit}</td><td>${r.vol_div}</td></tr>`).join("")
 ||"<tr><td colspan=5 class='k'>nothing passed</td></tr>";
