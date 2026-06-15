@@ -61,14 +61,16 @@ merged into something else. Got one wrong? Hit **edit** on any row in the Trades
 benchmark and net-worth number re-folds automatically.
 
 Resting orders (paper) are actionable: expand one with **show card** to see its plan again, then
-**I bought it** (records the buy, so it becomes a tracked holding) or **I sold it** (records the
-buy and prefills the sale so you just enter your price) — names taken straight from the order, so
-they always match.
+**I bought it** or **I sold it**. The `filled __ of N` box lets you log a **partial fill** — record
+just the part that actually filled, and the remainder keeps resting as its own order. Names and
+price come straight from the order, so they always match.
 
 If a held item shows a **CHECK … not in the scanner** card (a position whose name doesn't match
-the priced data — e.g. a typo, or an old apostrophe mismatch), the card has a **match to a scanned
-item** control: pick the right name from the same dropdown and it re-keys the position so it prices
-correctly (it voids and re-appends the fills under the canonical name — nothing is destroyed).
+the priced data — e.g. a typo, or an old apostrophe mismatch), you have three ways to resolve it:
+**match to a scanned item** (pick the right name from the dropdown and it re-keys the position so
+it prices correctly), **I sold it** (log the sale to close it), or the small **×** in the corner to
+**stop tracking it** entirely. All are event-sourced — fills are voided and (for a match)
+re-appended under the canonical name; nothing is destroyed.
 
 ## Why did the cards disappear? — the status line
 Above the cards there's always a one-line status: items scanned, positions held, resting orders,

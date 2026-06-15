@@ -156,6 +156,46 @@ def make_handler(io, token):
                             "order_id": f.get("order_id"), "note": f"rematched from {old}"})
                         moved += 1
                     out = {"ok": True, "moved": moved, "item": new}
+                elif path == "/api/order_fill":
+                    # record that a resting order filled — possibly only PARTLY.
+                    # The filled part becomes a buy; any remainder keeps resting.
+                    oid = int(body["order_id"])
+                    order = store.event_by_id(c, oid)
+                    if not order or order.get("kind") != "order":
+                        return self._send(404, '{"ok":false,"err":"no such order"}')
+                    full = float(order["qty"])
+                    q = max(0.0, min(float(body.get("qty") or full), full))
+                    if q <= 0:
+                        return self._send(200, '{"ok":false,"err":"quantity must be positive"}')
+                    ledger = order.get("ledger") or cfg["mode"]
+                    store.append(c, "fill", {
+                        "ledger": ledger, "item": order["item"], "side": "buy", "qty": q,
+                        "px": float(order["px"]), "card_id": order.get("card_id"),
+                        "sig": order.get("sig"), "target_px": order.get("target_px"),
+                        "order_id": oid, "note": "order filled"})
+                    remaining = full - q
+                    new_oid = None
+                    if remaining > 1e-9:
+                        new_oid = store.append(c, "order", {
+                            "ledger": ledger, "item": order["item"], "side": "buy",
+                            "qty": remaining, "px": float(order["px"]),
+                            "card_id": order.get("card_id"), "sig": order.get("sig"),
+                            "target_px": order.get("target_px"), "head": order.get("head"),
+                            "plan": order.get("plan"), "why": order.get("why"),
+                            "note": "remainder after partial fill"})
+                    out = {"ok": True, "filled": q, "remaining": round(remaining, 4),
+                           "new_order": new_oid, "item": order["item"], "px": float(order["px"])}
+                elif path == "/api/discard_item":
+                    # stop tracking a position (e.g. a CHECK item the scanner can't
+                    # price): void its fills so it folds out. Event-sourced — reversible.
+                    item = body["item"]
+                    ledger = body.get("ledger") or cfg["mode"]
+                    n = 0
+                    for f in store.fills(c, ledger):
+                        if f["item"] == item:
+                            store.append(c, "fill_void", {"void_id": f["id"], "note": "discarded"})
+                            n += 1
+                    out = {"ok": True, "voided": n}
                 elif path == "/api/void":
                     kind = "order_cancel" if body.get("kind") == "order" else "fill_void"
                     store.append(c, kind, {"void_id": int(body["id"]),

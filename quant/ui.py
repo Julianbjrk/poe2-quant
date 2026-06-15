@@ -54,6 +54,8 @@ padding:10px 14px;opacity:0;transition:opacity .3s;pointer-events:none;z-index:9
 .acitem{padding:6px 10px;cursor:pointer;white-space:nowrap}
 .acitem:hover,.acitem.sel{background:rgba(201,168,106,.2)}
 .matchbox input{max-width:240px}
+.cardx{position:absolute;top:4px;right:9px;color:var(--dim);font-size:20px;line-height:1;text-decoration:none}
+.cardx:hover{color:var(--warn)}
 .confirm{display:grid;grid-template-columns:1fr 1fr auto;gap:8px;margin-top:10px}
 svg{display:block;width:100%;height:60px;margin-top:8px}
 </style></head><body>
@@ -140,6 +142,7 @@ box.hidden=!box.hidden;if(!box.hidden){const inp=box.querySelector("[data-minput
 wrap.querySelectorAll("[data-mgo]").forEach(b=>b.onclick=()=>{
 const box=b.closest("[data-mbox]"),inp=box&&box.querySelector("[data-minput]");renameItem(b.dataset.item,inp?inp.value:"");});
 wrap.querySelectorAll("[data-det]").forEach(a=>a.onclick=()=>{const d=a.nextElementSibling;d.hidden=!d.hidden});
+wrap.querySelectorAll("[data-discard]").forEach(a=>a.onclick=()=>discardItem(a.dataset.discard));
 wrap.querySelectorAll("[data-cancel]").forEach(a=>a.onclick=async()=>{
 await api("/api/void",{id:+a.dataset.cancel,kind:"order"});toast("order cancelled");load()});
 // exit alerts: SELL/ABANDON are the only time-sensitive thing this app says
@@ -166,7 +169,8 @@ data-qty="${c.qty}" data-px="${side==="sell"?(c.target_px??c.px):c.px}" data-tgt
 data-sig="${esc(c.sig||c.act)}" data-act="${c.act}">${label}</button>
 <div class="confirm" hidden><input value="${c.qty}" placeholder="qty" title="how many" inputmode="decimal"><input value="${side==="sell"?(c.target_px??c.px):c.px}" placeholder="ex per unit" title="price per unit in exalted" inputmode="decimal">
 <button class="small">confirm</button></div>`;}
-return `<div class="card ${c.act}"><div class="head">${esc(c.head)}</div>
+const x=c.act==="CHECK"?`<a class="cardx" data-discard="${esc(c.item)}" title="stop tracking this">×</a>`:"";
+return `<div class="card ${c.act}" style="position:relative">${x}<div class="head">${esc(c.head)}</div>
 <div class="plan">${esc(c.plan||"")}</div>
 <div class="why">${esc(c.why||"")} ${c.det?`<a data-det="1">details ▸</a><div hidden>${dett(c.det)}</div>`:""}</div>${btn}</div>`}
 
@@ -214,14 +218,17 @@ const det=(o.head||o.plan||o.why)
 return `<tr><td>${esc(o.item)}</td><td>${o.side} ${o.qty} @ ${o.px} ex</td><td>${tgt}</td>
 <td><a data-od="${o.id}">show card ▸</a></td><td><a data-cancel="${o.id}">cancel</a></td></tr>
 <tr id="od${o.id}" hidden><td colspan="5" style="background:rgba(0,0,0,.18)">${det}
-<div style="margin-top:8px"><button class="small" data-obuy="${o.id}">I bought it</button>
+<div style="margin-top:8px">filled <input data-oqty value="${o.qty}" inputmode="decimal" style="width:64px"> of ${o.qty} ·
+<button class="small" data-obuy="${o.id}">I bought it</button>
 <button class="small" data-osell="${o.id}">I sold it</button></div></td></tr>`}).join("")
 ||"<tr><td class='k'>none</td></tr>";
 $("#orders").querySelectorAll("[data-od]").forEach(a=>a.onclick=()=>{const r=$("#od"+a.dataset.od);if(r)r.hidden=!r.hidden});
 $("#orders").querySelectorAll("[data-cancel]").forEach(a=>a.onclick=async()=>{
 await api("/api/void",{id:+a.dataset.cancel,kind:"order"});toast("order cancelled");load()});
-$("#orders").querySelectorAll("[data-obuy]").forEach(b=>b.onclick=()=>orderBought(b.dataset.obuy));
-$("#orders").querySelectorAll("[data-osell]").forEach(b=>b.onclick=()=>orderSold(b.dataset.osell));
+$("#orders").querySelectorAll("[data-obuy]").forEach(b=>b.onclick=()=>{
+const qi=b.parentElement.querySelector("[data-oqty]");orderBought(b.dataset.obuy,qi?qi.value:null)});
+$("#orders").querySelectorAll("[data-osell]").forEach(b=>b.onclick=()=>{
+const qi=b.parentElement.querySelector("[data-oqty]");orderSold(b.dataset.osell,qi?qi.value:null)});
 FILLS={};(D.fills||[]).forEach(f=>FILLS[f.id]=f);
 $("#trades tbody").innerHTML=(D.fills||[]).map(f=>`<tr><td>${esc(f.ts.slice(5,16).replace("T"," "))}</td>
 <td>${esc(f.item)}</td><td>${f.side}</td><td>${f.qty}</td><td>${f.px}</td>
@@ -339,17 +346,21 @@ const hit=N.find(n=>jnorm(n)===jnorm(v));
 $("#f_match").innerHTML=hit?`✓ binds to <b>${esc(hit)}</b> — it'll price and match your other trades`
 :`<span class="k">not a known item yet — saved exactly as typed (fine for things the scanner can't see)</span>`;}
 function orderById(id){return (D.orders||[]).find(o=>String(o.id)===String(id))}
-async function orderBought(id){const o=orderById(id);if(!o)return;
-try{await api("/api/fill",{item:o.item,side:"buy",qty:o.qty,px:o.px,ledger:D.cfg.mode,note:"order "+id+" bought"});
-await api("/api/void",{id:+id,kind:"order"});
-toast("logged the buy of "+o.qty+"× "+o.item+" — it's a holding now; HOLD/SELL cards will track it");load();
+async function orderBought(id,qty){const o=orderById(id);if(!o)return;
+const q=num(qty)||o.qty;if(!(q>0))return toast("enter how many actually filled");
+try{const r=await api("/api/order_fill",{order_id:+id,qty:q});
+toast(`logged buy of ${r.filled}× ${o.item}`+(r.remaining>0?` — ${r.remaining} still resting`:" — it's a holding now"));load();
 }catch(e){toast("couldn't record: "+e.message)}}
-async function orderSold(id){const o=orderById(id);if(!o)return;
-try{await api("/api/fill",{item:o.item,side:"buy",qty:o.qty,px:o.px,ledger:D.cfg.mode,note:"order "+id+" bought"});
-await api("/api/void",{id:+id,kind:"order"});
-prefillClose(o.item,o.qty);
-toast("logged the buy at "+o.px+" ex — now enter what you sold it for and record");
+async function orderSold(id,qty){const o=orderById(id);if(!o)return;
+const q=num(qty)||o.qty;if(!(q>0))return toast("enter how many actually filled");
+try{const r=await api("/api/order_fill",{order_id:+id,qty:q});
+prefillClose(o.item,r.filled);
+toast(`logged buy of ${r.filled}× at ${o.px} ex`+(r.remaining>0?` (${r.remaining} still resting)`:"")+" — now enter what you sold it for");
 }catch(e){toast("couldn't record: "+e.message)}}
+async function discardItem(item){
+if(!confirm(`Stop tracking "${item}"? Its recorded fills are voided so it leaves your positions — you still hold it in-game; this just removes it from QUANT.`))return;
+try{await api("/api/discard_item",{item,ledger:D.cfg.mode});toast("stopped tracking "+item);load();
+}catch(e){toast("couldn't remove: "+e.message)}}
 function startEdit(f){EDITING=f;
 $("#f_item").value=f.item;$("#f_side").value=f.side;$("#f_qty").value=f.qty;$("#f_px").value=f.px;
 $("#f_go").textContent="save edit #"+f.id;$("#f_cancel").hidden=false;$("#fillform").classList.add("editing");
