@@ -485,9 +485,14 @@ def _poll(cfg, io, db_path, store_snap):
     # ---- gates, sizing, card lifecycle -----------------------------------
     active = store.kv_json(c, "cards_active", [])
     pos_now = port["positions"]
-    n_orders = len(store.pending_orders(c, mode))
+    # resting paper orders are pending commitments: they count against both the
+    # position cap and free capital, so cards can't pile up unfilled bids.
+    orders_open = store.pending_orders(c, mode)
+    n_orders = len(orders_open)
+    orders_notional = sum(float(o.get("qty") or 0) * float(o.get("px") or 0) for o in orders_open)
     bankroll_ex = port["liquid_ex"] + port["positions_ex"]
-    deployable = max(port["liquid_ex"] - bankroll_ex * adv["liquid_reserve_pct"] / 100, 0)
+    deployable = max(port["liquid_ex"] - bankroll_ex * adv["liquid_reserve_pct"] / 100
+                     - orders_notional, 0)
     deployable0 = deployable
     family_spent = {}
     for item, st in pos_now.items():
@@ -527,9 +532,16 @@ def _poll(cfg, io, db_path, store_snap):
         else:
             store.append(c, "card_event", {"card_id": cardst["id"], "state": "EXPIRED",
                                            "reason": "the edge faded before it filled"}, ts)
+    # shadow book is loaded here so it can keep forecasting the top opportunities
+    # regardless of whether the user has a free slot to act on them.
+    shadow = store.kv_json(c, "shadow", {"orders": [], "pos": []})
+    shadow_tracked = ({o["item"] for o in shadow["orders"]} | {p["item"] for p in shadow["pos"]}
+                      | {cs["prop"]["item"] for cs in kept})
+    shadow_room = max(0, adv["shadow_cap"] - len(shadow["orders"]) - len(shadow["pos"]))
     new_cards, shadow_new = [], []
     entries_off = circuit or not rate
-    slots = max(0, min(adv["max_cards"], preset["max_positions"] - len(pos_now)) - len(kept))
+    slots = max(0, min(adv["max_cards"], preset["max_positions"] - len(pos_now) - n_orders)
+                - len(kept))
     fams_used = {cs["prop"]["family"] for cs in kept}
     for p in props:
         if (p["sig"], p["item"]) not in by_key or p["item"] in pos_now:
@@ -547,17 +559,22 @@ def _poll(cfg, io, db_path, store_snap):
             fams_used.add(p["family"])
             slots -= 1
             shadow_new.append(cs)
-        elif sized and gated and len(shadow_new) < 6:
-            cs = {"id": f"{p['sig']}:{p['item']}:{ts}", "born": ts, "prop": p,
-                  "size": sized, "shadow_only": True}
-            shadow_new.append(cs)  # gated signals keep shadow-trading to earn back
-        elif miss is None and not gated and why_not:
-            miss = {"item": p["item"], "sig": p["sig"], "reason": why_not}
+            shadow_tracked.add(p["item"])
+            shadow_room -= 1
+        else:
+            # forecast it in the shadow book anyway (slots full, capital tied up,
+            # family used, or gated) so self-grading never stalls on user state.
+            if p["item"] not in shadow_tracked and shadow_room > 0:
+                shadow_new.append({"id": f"{p['sig']}:{p['item']}:{ts}", "born": ts,
+                                   "prop": p, "size": sized or {"qty": 1}, "shadow_only": True})
+                shadow_tracked.add(p["item"])
+                shadow_room -= 1
+            if miss is None and not gated and why_not:
+                miss = {"item": p["item"], "sig": p["sig"], "reason": why_not}
     active = kept + new_cards
     store.kv_set_json(c, "cards_active", active)
 
     # ---- predictions + shadow book ---------------------------------------
-    shadow = store.kv_json(c, "shadow", {"orders": [], "pos": []})
     for cs in shadow_new:
         p = cs["prop"]
         pid = "p:" + cs["id"]

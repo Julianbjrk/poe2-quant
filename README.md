@@ -63,7 +63,9 @@ benchmark and net-worth number re-folds automatically.
 Resting orders (paper) are actionable: expand one with **show card** to see its plan again, then
 **I bought it** or **I sold it**. The `filled __ of N` box lets you log a **partial fill** — record
 just the part that actually filled, and the remainder keeps resting as its own order. Names and
-price come straight from the order, so they always match.
+price come straight from the order, so they always match. **Cancel all** clears every resting order
+at once (held positions untouched). Resting orders count as pending commitments — against both your
+position cap and free capital — so unfilled bids can't pile up and silently over-commit you.
 
 If a held item shows a **CHECK … not in the scanner** card (a position whose name doesn't match
 the priced data — e.g. a typo, or an old apostrophe mismatch), you have three ways to resolve it:
@@ -108,6 +110,10 @@ release redefined the graded event, the per-signal calibration and the auto-gate
 first run — they were measured under the old definition; your trade ledger, paper track record, and
 the full prediction history are preserved. DIP re-seeds from your last `--bootstrap` automatically;
 re-run `python quant.py --bootstrap` if you want to refresh it.)
+
+Crucially, the shadow book keeps forecasting the **top opportunities every poll regardless of
+whether you have a free slot or capital to act** (up to `shadow_cap`), so the self-evaluation never
+stalls just because your positions are full — the app can always answer "is it working?"
 
 **Paper mode is the default** and uses the same honest fill engine (no instant-fill fiction). The
 settings panel shows a **graduation rule**: the app recommends real mode only when ≥14 days of

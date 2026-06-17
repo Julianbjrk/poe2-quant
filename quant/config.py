@@ -68,6 +68,7 @@ ADVANCED_DEFAULTS = {
     "hysteresis": 0.8,              # active card survives until score < gate × this
     "rotation_margin": 1.3,         # replacement must be ≥30% better per hour
     "max_cards": 3,
+    "shadow_cap": 8,                # concurrent shadow-book forecasts (independent of your slots)
     "gate_n_min": 20,               # graded outcomes before auto-gating can trip
     "circuit_z": 2.5,               # market-wide move (in its own sd) that halts entries
     "grad_days_min": 14,            # graduation: days of paper curve required…

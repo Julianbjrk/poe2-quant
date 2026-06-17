@@ -201,6 +201,12 @@ def make_handler(io, token):
                     store.append(c, kind, {"void_id": int(body["id"]),
                                            "note": body.get("note", "corrected")})
                     out = {"ok": True}
+                elif path == "/api/cancel_orders":
+                    n = 0
+                    for o in store.pending_orders(c, body.get("ledger") or cfg["mode"]):
+                        store.append(c, "order_cancel", {"void_id": o["id"], "note": "cancel all"})
+                        n += 1
+                    out = {"ok": True, "cancelled": n}
                 elif path == "/api/holdings":
                     store.append(c, "holdings_set", {
                         "div": float(body.get("div") or 0), "ex": float(body.get("ex") or 0),

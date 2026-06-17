@@ -138,7 +138,8 @@ class TestEngine(unittest.TestCase):
         self.assertLess(target, 100.0)
         c = store.connect(self.db)
         shadow = store.kv_json(c, "shadow")
-        self.assertEqual(len(shadow["orders"]), 1)
+        self.assertGreaterEqual(len([o for o in shadow["orders"]
+                                     if o["item"] == "Test Orb" and o["sig"] == "DIP"]), 1)
         # a paper take = resting order, honest fills only (use the card's numbers)
         oid = store.append(c, "order", {"ledger": "paper", "item": "Test Orb",
                                         "side": "buy", "qty": card["qty"], "px": entry,
@@ -154,8 +155,9 @@ class TestEngine(unittest.TestCase):
         self.io.step(1)
         c = store.connect(self.db)
         shadow = store.kv_json(c, "shadow")
-        self.assertEqual(len(shadow["orders"]), 0)
-        self.assertEqual(len(shadow["pos"]), 1)
+        self.assertFalse([o for o in shadow["orders"] if o["item"] == "Test Orb" and o["sig"] == "DIP"])
+        self.assertEqual(len([p for p in shadow["pos"]
+                              if p["item"] == "Test Orb" and p["sig"] == "DIP"]), 1)
         fills = store.fills(c, "paper")
         self.assertEqual(len(fills), 1)
         self.assertEqual(fills[0]["order_id"], oid)
@@ -168,12 +170,13 @@ class TestEngine(unittest.TestCase):
         snap = self.run_poll()
         c = store.connect(self.db)
         graded = store.predictions_graded(c, 30)
-        self.assertEqual(len(graded), 1)
-        self.assertEqual(graded[0]["out"]["hit"], 1)
-        self.assertGreater(graded[0]["out"]["realized_pct"], 0)
+        dip_hits = [g for g in graded if g["item"] == "Test Orb" and g["sig"] == "DIP"
+                    and g["out"].get("hit") == 1]
+        self.assertTrue(dip_hits)
+        self.assertGreater(dip_hits[0]["out"]["realized_pct"], 0)
         calib = store.kv_json(c, "calib")
         base = calib_default(self.cfg["adv"])
-        self.assertEqual(calib["DIP"]["hit"][0], base["DIP"]["hit"][0] + 1)
+        self.assertGreaterEqual(calib["DIP"]["hit"][0], base["DIP"]["hit"][0] + 1)
         c.close()
         sells = [c_ for c_ in snap["cards"] if c_["act"] == "SELL"]
         self.assertEqual(len(sells), 1)
@@ -280,6 +283,45 @@ class TestEngine(unittest.TestCase):
         self.assertIsNotNone(closed)                     # row still closed
         c.close()
 
+    def test_shadow_book_forecasts_even_when_slots_full(self):
+        # the bug the user hit: with all position slots full, the shadow book
+        # must KEEP forecasting the top opportunities so self-grading never stalls.
+        self.play_script(dip_script())
+        c = store.connect(self.db)
+        for item, px in [("Alpha Orb", 50.), ("Beta Orb", 25.), ("Gamma Orb", 60.)]:
+            store.append(c, "fill", {"ledger": "paper", "item": item, "side": "buy", "qty": 1, "px": px})
+        store.kv_set_json(c, "shadow", {"orders": [], "pos": []})   # start the shadow book empty
+        store.kv_set_json(c, "cards_active", [])
+        c.commit()
+        c.close()
+        self.io.test_px = 88.5
+        snap = self.run_poll()
+        self.assertGreaterEqual(snap["status"]["positions"], 3)
+        self.assertEqual(snap["status"]["slots_free"], 0)         # no room to act
+        self.assertGreater(snap["stats"]["shadow_open"], 0)       # but still forecasting
+        c = store.connect(self.db)
+        sh = store.kv_json(c, "shadow")
+        self.assertGreater(len(sh["orders"]) + len(sh["pos"]), 0)
+        c.close()
+
+    def test_resting_orders_count_against_slots(self):
+        # resting paper orders are pending commitments — they fill the cap so
+        # cards can't pile up unfilled bids (the over-commitment the user hit).
+        self.play_script(dip_script())
+        c = store.connect(self.db)
+        store.kv_set_json(c, "cards_active", [])
+        for i in range(3):
+            store.append(c, "order", {"ledger": "paper", "item": f"Pending {i}",
+                                      "side": "buy", "qty": 2, "px": 20})
+        c.commit()
+        c.close()
+        self.io.test_px = 88.5
+        snap = self.run_poll()
+        self.assertEqual(snap["status"]["orders"], 3)
+        self.assertEqual(snap["status"]["slots_free"], 0)
+        self.assertFalse([c_ for c_ in snap["cards"] if c_["act"] in ("DIP", "MAKE", "ROUTE", "PARITY")])
+        self.assertIn("slots", snap["status"]["entries_reason"])
+
     def test_unfilled_entry_expires_and_grades_fill_forecast(self):
         snap = self.play_script(dip_script())
         self.assertTrue([c for c in snap["cards"] if c["act"] == "DIP"])
@@ -290,10 +332,12 @@ class TestEngine(unittest.TestCase):
             self.io.step(1)
         c = store.connect(self.db)
         graded = store.predictions_graded(c, 30)
-        self.assertTrue(graded)
-        self.assertEqual(graded[0]["out"]["filled"], 0)
+        dip_to = [g for g in graded if g["item"] == "Test Orb" and g["sig"] == "DIP"]
+        self.assertTrue(dip_to)
+        self.assertEqual(dip_to[0]["out"]["filled"], 0)          # bid never reached
         shadow = store.kv_json(c, "shadow")
-        self.assertEqual(shadow["orders"], [])
+        self.assertFalse([o for o in shadow["orders"]
+                          if o["item"] == "Test Orb" and o["sig"] == "DIP"])  # its DIP order is gone
         c.close()
 
 

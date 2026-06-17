@@ -73,7 +73,7 @@ svg{display:block;width:100%;height:60px;margin-top:8px}
 <div id="cards"></div>
 
 <details id="record"><summary>Record — orders, trades, capital</summary>
-<section><h2>Resting orders</h2><table id="orders"><tbody></tbody></table></section>
+<section><h2>Resting orders <button class="small" id="cancelall" hidden style="float:right">cancel all</button></h2><table id="orders"><tbody></tbody></table></section>
 <section><h2>Trades</h2><table id="trades"><thead><tr><th>when</th><th>item</th><th>side</th>
 <th>qty</th><th>ex / unit</th><th></th><th></th></tr></thead><tbody></tbody></table>
 <div class="grid" id="fillform" style="margin-top:10px">
@@ -231,6 +231,7 @@ $("#orders").querySelectorAll("[data-obuy]").forEach(b=>b.onclick=()=>{
 const qi=b.parentElement.querySelector("[data-oqty]");orderBought(b.dataset.obuy,qi?qi.value:null)});
 $("#orders").querySelectorAll("[data-osell]").forEach(b=>b.onclick=()=>{
 const qi=b.parentElement.querySelector("[data-oqty]");orderSold(b.dataset.osell,qi?qi.value:null)});
+$("#cancelall").hidden=!(D.orders||[]).length;
 FILLS={};(D.fills||[]).forEach(f=>FILLS[f.id]=f);
 $("#trades tbody").innerHTML=(D.fills||[]).map(f=>`<tr><td>${esc(f.ts.slice(5,16).replace("T"," "))}</td>
 <td>${esc(f.item)}</td><td>${f.side}</td><td>${f.qty}</td><td>${f.px}</td>
@@ -387,6 +388,10 @@ $("#refresh").textContent="refresh";load();};
 $("#up_check").onclick=async()=>{$("#up_status").textContent="checking…";
 try{await api("/api/update")}catch(e){toast("check failed: "+e.message)}load();};
 $("#trusttog").onclick=()=>{const d=$("#trustdetail");d.hidden=!d.hidden};
+$("#cancelall").onclick=async()=>{const n=(D.orders||[]).length;
+if(!n||!confirm(`Cancel all ${n} resting order${n>1?"s":""}? (Held positions are not affected.)`))return;
+try{const r=await api("/api/cancel_orders",{});toast(`cancelled ${r.cancelled} order${r.cancelled===1?"":"s"} — slots freed`);load();}
+catch(e){toast("couldn't cancel: "+e.message)}};
 $("#f_go").onclick=async()=>{
 const item=$("#f_item").value.trim(),qty=num($("#f_qty").value),px=num($("#f_px").value);
 if(!item||!(qty>0)||!(px>0))return toast("need an item, a positive qty, and a positive price PER UNIT");
