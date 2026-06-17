@@ -171,7 +171,7 @@ data-qty="${c.qty}" data-px="${side==="sell"?(c.target_px??c.px):c.px}" data-tgt
 data-sig="${esc(c.sig||c.act)}" data-act="${c.act}">${label}</button>
 <div class="confirm" hidden><input value="${c.qty}" placeholder="qty" title="how many" inputmode="decimal"><input value="${side==="sell"?(c.target_px??c.px):c.px}" placeholder="ex per unit" title="price per unit in exalted" inputmode="decimal">
 <button class="small">confirm</button></div>`;}
-const x=c.act==="CHECK"?`<a class="cardx" data-discard="${esc(c.item)}" title="stop tracking this">×</a>`:"";
+const x=(c.act==="CHECK"||c.act==="HOLD")?`<a class="cardx" data-discard="${esc(c.item)}" title="stop tracking this">×</a>`:"";
 return `<div class="card ${c.act}" style="position:relative">${x}<div class="head">${esc(c.head)}</div>
 <div class="plan">${esc(c.plan||"")}</div>
 <div class="why">${esc(c.why||"")} ${c.det?`<a data-det="1">details ▸</a><div hidden>${dett(c.det)}</div>`:""}</div>${btn}</div>`}
