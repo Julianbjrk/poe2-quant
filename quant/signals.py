@@ -153,17 +153,24 @@ def route(item, rts, row, calib, adv):
     legs = [(m, d) for m, d in rts.items() if d["trades"] >= adv["route_min_trades"]]
     if len(legs) < 2:
         return None
-    px = row["px"] if row else None
+    # Anchor on the EXALTED book (the base unit, always the reliable price),
+    # falling back to ninja's mid; drop any book that disagrees with the anchor
+    # beyond the band. This now runs for EVERY item — the old guard only ran when
+    # ninja priced the item, so poe2scout-only items (alloys/catalysts/ores)
+    # bypassed it and lot-size distortion in the coarse divine/chaos books became
+    # phantom "+273%" routes that never filled.
+    anchor = (rts.get("exalted") or {}).get("px_ex") or (row["px"] if row else None)
+    if not anchor:
+        return None
     band = adv["route_band_pct"] / 100
-    if px:
-        legs = [(m, d) for m, d in legs if abs(d["px_ex"] - px) / px <= band]
-        if len(legs) < 2:
-            return None
+    legs = [(m, d) for m, d in legs if abs(d["px_ex"] - anchor) / anchor <= band]
+    if len(legs) < 2:
+        return None
     cheap = min(legs, key=lambda x: x[1]["px_ex"])
     rich = max(legs, key=lambda x: x[1]["px_ex"])
     dev = (rich[1]["px_ex"] - cheap[1]["px_ex"]) / cheap[1]["px_ex"] * 100
-    if dev < adv["route_min_edge_pct"]:
-        return None
+    if dev < adv["route_min_edge_pct"] or dev > adv["route_max_dev_pct"]:
+        return None   # below the floor to bother, or a too-good-to-be-true distorted gap
     hops = 2 + (cheap[0] != "exalted") + (rich[0] != "exalted")
     fees = hops * fee_pct(cheap[1]["px_ex"], adv["fee_curve"]) + 2.0  # +2% stale-pair buffer
     gain = dev - fees

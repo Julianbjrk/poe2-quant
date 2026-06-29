@@ -26,16 +26,22 @@ def make_tarball(version, files):
 
 
 class TestToken(unittest.TestCase):
+    def setUp(self):
+        # hermetic: a token in the ambient env (CI proxies inject one) must not
+        # leak into these tests
+        import os
+        self._saved = {k: os.environ.pop(k, None) for k in ("GITHUB_TOKEN", "QUANT_GH_TOKEN")}
+
+    def tearDown(self):
+        import os
+        for k, v in self._saved.items():
+            if v is not None:
+                os.environ[k] = v
+
     def test_env_token_wins(self):
         import os
-        old = os.environ.pop("GITHUB_TOKEN", None)
         os.environ["QUANT_GH_TOKEN"] = "abc"
-        try:
-            self.assertEqual(update.token_from({"adv": {"github_token": "zzz"}}), "abc")
-        finally:
-            os.environ.pop("QUANT_GH_TOKEN", None)
-            if old:
-                os.environ["GITHUB_TOKEN"] = old
+        self.assertEqual(update.token_from({"adv": {"github_token": "zzz"}}), "abc")
 
     def test_config_token_fallback(self):
         self.assertEqual(update.token_from({"adv": {"github_token": "fromcfg"}}), "fromcfg")

@@ -100,6 +100,19 @@ class TestGates(unittest.TestCase):
         update_gates(gates, summarize(_graded("DIP", 5, -3.0)), ADV)
         self.assertNotIn("DIP", gates)
 
+    def test_hit_deficit_gates_a_rarely_closing_signal(self):
+        # ROUTE's real failure: only 14 closed (the edge gate needs 20) yet 0/14
+        # hit vs a promised ~60% — the hit-calibration gate must catch it anyway.
+        gates = {}
+        update_gates(gates, summarize(_graded("ROUTE", 14, -0.2)), ADV)
+        self.assertTrue(gates["ROUTE"]["off"])
+
+    def test_overdelivering_signal_not_gated(self):
+        # a signal that hits MORE often than it predicted is never gated
+        gates = {}
+        update_gates(gates, summarize(_graded("DIP", 14, +3.0)), ADV)
+        self.assertFalse(gates.get("DIP", {}).get("off", False))
+
 
 class TestGraduation(unittest.TestCase):
     def test_needs_days_and_tstat(self):

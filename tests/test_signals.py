@@ -81,6 +81,21 @@ class TestRoute(unittest.TestCase):
                "divine": {"px_ex": 112.0, "trades": 40, "value_ex": 4480}}
         self.assertIsNone(route("Test Orb", rts, row(px=100, theta=100), CAL, ADV))
 
+    def test_phantom_route_on_unscanned_item_is_rejected(self):
+        # the real bug: a poe2scout-only item (no ninja row) with a lot-distorted
+        # chaos book gives a fake +273% gap. The exalted-anchor guard now runs
+        # even with row=None, so the distorted leg is dropped and no route fires.
+        rts = {"exalted": {"px_ex": 34.0, "trades": 38, "value_ex": 1292},
+               "chaos": {"px_ex": 127.0, "trades": 38, "value_ex": 4826}}
+        self.assertIsNone(route("Adaptive Alloy", rts, None, CAL, ADV))
+
+    def test_implausible_gap_capped(self):
+        # a gap within the outlier band but above the ceiling is still too-good-
+        # to-be-true (a distorted book, not a real fillable arbitrage)
+        rts = {"exalted": {"px_ex": 100.0, "trades": 60, "value_ex": 6000},
+               "divine": {"px_ex": 132.0, "trades": 40, "value_ex": 5280}}  # +32% > 25% ceiling
+        self.assertIsNone(route("Test Orb", rts, row(px=100, theta=100), CAL, ADV))
+
 
 class TestParity(unittest.TestCase):
     def test_recipe_break_is_an_arb(self):

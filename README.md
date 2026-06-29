@@ -97,9 +97,12 @@ return, model version, features) **before** the outcome is knowable. A **shadow 
 every card whether you do or not — resting orders fill only when the market actually trades
 through the price — so the system grades ~20 forecasts a week even if you trade twice. Outcomes
 are scored with proper scoring rules (Brier, CRPS), feed conjugate posteriors that replace the
-magic constants (reversion fraction, spread capture, hit rates), and signals whose measured edge
-can't clear zero are **auto-gated off, visibly,** while they keep shadow-trading to earn their way
-back. *NO EDGE is a finding, the way NO TRADE is advice.*
+magic constants (reversion fraction, spread capture, hit rates), and signals that can't earn their
+keep are **auto-gated off, visibly,** while they keep shadow-trading to earn their way back. Gating
+has two independent triggers: the realized **edge** can't clear zero, or the fills **hit far less
+often than the forecasts promised** (a signal can fire hundreds of times yet rarely close, so the
+edge test never trips — the hit-calibration test catches it). *NO EDGE is a finding, the way NO
+TRADE is advice.*
 
 The odds a card shows are the **empirically-measured** frequency of exactly the event the shadow
 book grades — a first-passage touch of the target within the forecast's own horizon — so they
@@ -143,8 +146,10 @@ paper alpha clear a t-test against the worst benchmark. It will tell you when it
 - **DIP** — idiosyncratic dip in a reverting item (OU + factor gates + knife/freefall guards).
 - **MAKE** — patient spread capture on deep books (≥600 div/day), spread never quoted inside the noise.
 - **ROUTE** — the same item priced differently via its exalted/divine/chaos books
-  (poe2scout SnapshotPairs, self-validated against ninja's ex/div). True arbitrage; both books
-  named on the card; verify in-game first, pair data is up to an hour old.
+  (poe2scout SnapshotPairs). True arbitrage; both books named on the card; verify in-game first,
+  pair data is up to an hour old. Every book is sanity-checked against the **exalted book** (the
+  base unit, the reliable price) — so a coarse, lot-distorted divine/chaos book can't fabricate a
+  phantom "+273%" gap, and divergences above `route_max_dev_pct` are rejected as too-good-to-be-true.
 - **PARITY** — deterministic conversion recipes (e.g. 3:1 distilled-emotion instilling) priced
   against the market. Recipes are config data in `config.advanced.json → recipes`: do each once
   with one unit, then set `"verified": true` — unverified recipes stay humble and say so.

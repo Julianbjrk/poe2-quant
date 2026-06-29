@@ -58,7 +58,8 @@ ADVANCED_DEFAULTS = {
     "family_z_floor": -2.5,         # family in freefall → no dip entries
     "route_min_edge_pct": 4.0,
     "route_min_trades": 10,
-    "route_band_pct": 40,           # each leg must sit within this of ninja mid
+    "route_band_pct": 40,           # each book must sit within this of the exalted/ninja anchor
+    "route_max_dev_pct": 25,        # a cross-book gap bigger than this is a distorted book, not arb
     "spread_capture_prior_pct": 6.0,
     "hit_prior": {"DIP": [6, 4], "MAKE": [6, 5], "ROUTE": [7, 3], "PARITY": [8, 2]},  # Beta(a,b)
     "rev_frac_prior": [0.7, 0.15, 12],   # mean, sd, pseudo-n for DIP reversion fraction
@@ -69,7 +70,8 @@ ADVANCED_DEFAULTS = {
     "rotation_margin": 1.3,         # replacement must be ≥30% better per hour
     "max_cards": 3,
     "shadow_cap": 8,                # concurrent shadow-book forecasts (independent of your slots)
-    "gate_n_min": 20,               # graded outcomes before auto-gating can trip
+    "gate_n_min": 20,               # closed trades before the edge gate can trip
+    "gate_fill_min": 8,             # fills before the hit-calibration gate can trip
     "circuit_z": 2.5,               # market-wide move (in its own sd) that halts entries
     "grad_days_min": 14,            # graduation: days of paper curve required…
     "grad_t_min": 1.64,             # …and t-stat of daily alpha vs worst benchmark

@@ -161,21 +161,40 @@ def model_reliability(graded):
 
 
 def update_gates(gates, summary, adv):
-    """Auto-gate signals whose measured edge can't clear zero. Gated signals
-    keep shadow-trading so they can earn their way back. Hysteresis built in."""
+    """Auto-gate signals that can't earn their keep. Two independent triggers,
+    both with hysteresis; gated signals keep shadow-trading to earn their way
+    back:
+
+      • edge — the realized edge can't clear zero (needs gate_n_min CLOSED trades);
+      • hit-calibration — the fills hit far less often than the forecasts
+        promised. A signal can fire hundreds of times yet rarely CLOSE (so the
+        edge gate never trips) while its fabricated gains keep its EV positive —
+        ROUTE's 0/14 hits vs a promised ~61% is overwhelming long before 20 close.
+    """
     for sig, s in summary.items():
-        n, mean_e, sd_e = s["n_closed"], s["edge_mean_pct"], s["edge_sd_pct"]
-        if not n or n < adv["gate_n_min"] or mean_e is None or not sd_e:
-            continue
-        t = mean_e / (sd_e / math.sqrt(n))
-        p_pos = Phi(t)
         prev = gates.get(sig, {}).get("off", False)
-        off = prev
-        if p_pos < 0.40:
-            off = True
-        elif p_pos > 0.55:
-            off = False
-        gates[sig] = {"off": off, "n": n, "edge": mean_e, "p_pos": round(p_pos, 2)}
+        off, evaluated = prev, False
+        n, mean_e, sd_e = s["n_closed"], s["edge_mean_pct"], s["edge_sd_pct"]
+        if n and n >= adv["gate_n_min"] and mean_e is not None and sd_e:
+            evaluated = True
+            p_pos = Phi(mean_e / (sd_e / math.sqrt(n)))
+            if p_pos < 0.40:
+                off = True
+            elif p_pos > 0.55:
+                off = False
+        m, hp, hf = s["n_filled"], s["hit_pred"], s["hit_freq"]
+        if m and m >= adv["gate_fill_min"] and hp is not None and hf is not None:
+            evaluated = True
+            # z of (realized − expected) hits under "forecasts are calibrated";
+            # Poisson-binomial variance ≈ m·p̄·(1−p̄).
+            z = (hf - hp) * m / math.sqrt(max(m * hp * (1 - hp), 1e-6))
+            p_cal = Phi(z)
+            if p_cal < 0.05:
+                off = True
+            elif p_cal > 0.30:
+                off = False
+        if evaluated:
+            gates[sig] = {"off": off, "n": n, "edge": mean_e, "hit_freq": hf}
     return gates
 
 
