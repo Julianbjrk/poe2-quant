@@ -216,6 +216,11 @@ class TestEngine(unittest.TestCase):
         self.assertIn("p_hit", pl)
         self.assertIn("p_model", pl)              # the reliability diagnostic
         self.assertEqual(pl["model"], eng.MODEL_V)
+        feat = pl["feat"]                          # diagnostic freight (Task 2)
+        self.assertIn("trend7", feat)              # present even if None
+        self.assertIn("vol_div", feat)
+        self.assertIn("hour", feat)
+        self.assertTrue(0 <= feat["hour"] <= 23)
 
     def test_shadow_grades_at_horizon_with_mfe(self):
         # a position that never touches its target grades MISS at H_h (not the

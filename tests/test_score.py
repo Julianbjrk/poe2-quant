@@ -3,7 +3,8 @@ import unittest
 
 from quant.config import ADVANCED_DEFAULTS as ADV
 from quant.score import (brier, calib_apply, calib_default, crps_gauss,
-                         graduation, model_reliability, normal_update,
+                         feature_reliability, fill_by_hour, graduation,
+                         model_reliability, normal_update,
                          summarize, update_gates)
 
 
@@ -79,6 +80,56 @@ class TestReliability(unittest.TestCase):
         lo = [b for b in rel["DIP"]["buckets"] if b["hi"] <= 0.4][0]
         hi = [b for b in rel["DIP"]["buckets"] if b["lo"] >= 0.6][0]
         self.assertLess(lo["freq"], hi["freq"])
+
+
+class TestFeatureReliability(unittest.TestCase):
+    def _dip(self, feat, hit):
+        return {"sig": "DIP", "pred": {"feat": feat}, "out": {"filled": 1, "hit": hit}}
+
+    def test_z_ou_separates_and_thin_buckets_suppressed(self):
+        graded = []
+        for _ in range(6):                       # deep dips (z_ou < -2.5) hit
+            graded.append(self._dip({"z_ou": -3.0, "drift_z": 0.0}, 1))
+        for _ in range(6):                       # shallow ones (>= -2.5) miss
+            graded.append(self._dip({"z_ou": -2.0, "drift_z": 0.0}, 0))
+        graded.append(self._dip({"z_ou": -3.0, "drift_z": 1.0}, 1))  # lone drift>0.5
+        fr = feature_reliability(graded)
+        zb = fr["DIP"]["feats"]["z_ou"]
+        lo = [b for b in zb if "<-2.5" in b["label"]][0]
+        hi = [b for b in zb if ">=-2.5" in b["label"]][0]
+        self.assertEqual(lo["freq"], 1.0)
+        self.assertEqual(hi["freq"], 0.0)
+        # only the mid drift bucket (n=12) survives; the n=1 >0.5 bucket is dropped
+        self.assertTrue(all(">0.5" not in b["label"]
+                            for b in fr["DIP"]["feats"]["drift_z"]))
+
+    def test_skips_signal_under_ten_filled(self):
+        graded = [self._dip({"z_ou": -3.0}, 1) for _ in range(9)]
+        self.assertNotIn("DIP", feature_reliability(graded))
+
+
+class TestFillByHour(unittest.TestCase):
+    def test_bands_and_weekend_split_with_suppression(self):
+        graded = []
+        for _ in range(6):                       # Fri 02:00 UTC — always fills
+            graded.append({"sig": "MAKE", "ts": "2026-07-03T02:00:00",
+                           "pred": {"p_fill": 0.8}, "out": {"filled": 1}})
+        for _ in range(6):                       # Sat 14:00 UTC — never fills
+            graded.append({"sig": "MAKE", "ts": "2026-07-04T14:00:00",
+                           "pred": {"p_fill": 0.8}, "out": {"filled": 0}})
+        fh = fill_by_hour(graded)
+        bands = {b["band"]: b for b in fh["utc_band"]}
+        self.assertEqual(bands["00-06"]["fill_freq"], 1.0)
+        self.assertEqual(bands["12-18"]["fill_freq"], 0.0)
+        self.assertNotIn("06-12", bands)         # empty band suppressed
+        days = {b["day"]: b for b in fh["day"]}
+        self.assertEqual(days["weekday"]["n"], 6)
+        self.assertEqual(days["weekend"]["n"], 6)
+
+    def test_empty_when_too_thin(self):
+        graded = [{"sig": "MAKE", "ts": "2026-07-03T02:00:00",
+                   "pred": {"p_fill": 0.5}, "out": {"filled": 1}} for _ in range(3)]
+        self.assertEqual(fill_by_hour(graded), {})
 
 
 def _graded(sig, n, edge):

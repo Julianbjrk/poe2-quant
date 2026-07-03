@@ -102,6 +102,8 @@ def dip(row, calib, adv):
         gap_pct = (target / entry - 1) * 100
     else:
         return None
+    det["trend7"] = row.get("trend7")          # diagnostic only — never sizes
+    det["src_gap_pct"] = row.get("src_gap_pct")
     if p_model is None:
         p_model = p_hit
     ev = p_hit * gain - (1 - p_hit) * loss
@@ -139,7 +141,8 @@ def make(row, calib, adv):
             "vol_div": row["vol_div"],
             "why": f"deep book ({row['vol_div']:,.0f} div/d) — work both sides of the spread patiently",
             "det": {"spread_pct": round(spread, 2), "p_cycle": round(p_cycle, 2),
-                    "fees_pct": round(fees, 2), "day_sd_pct": round(sd_day_pct, 2)},
+                    "fees_pct": round(fees, 2), "day_sd_pct": round(sd_day_pct, 2),
+                    "trend7": row.get("trend7"), "src_gap_pct": row.get("src_gap_pct")},
             "deterministic": False}
 
 
@@ -193,7 +196,8 @@ def route(item, rts, row, calib, adv):
                     "verify both books in-game first, pair data is up to an hour old"),
             "det": {"buy_via": cheap[0], "sell_via": rich[0], "dev_pct": round(dev, 1),
                     "hops": hops, "fees_pct": round(fees, 2),
-                    "trades": min(cheap[1]["trades"], rich[1]["trades"])},
+                    "trades": min(cheap[1]["trades"], rich[1]["trades"]),
+                    "trend7": (row or {}).get("trend7"), "src_gap_pct": (row or {}).get("src_gap_pct")},
             "deterministic": True}
 
 

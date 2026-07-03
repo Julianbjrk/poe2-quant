@@ -160,6 +160,89 @@ def model_reliability(graded):
     return out
 
 
+def _feat_buckets(pairs, edges, labels):
+    """pairs: [(x, hit)] for one raw feature; `edges` gives len(labels)+1 cut
+    points defining consecutive bins [edges[i], edges[i+1]). -> bucket dicts,
+    dropping any with n<5 (a bucket that thin says nothing)."""
+    out = []
+    for i, lab in enumerate(labels):
+        lo, hi = edges[i], edges[i + 1]
+        sel = [y for x, y in pairs if x is not None and lo <= x < hi]
+        if len(sel) >= 5:
+            out.append({"label": lab, "n": len(sel),
+                        "freq": round(sum(sel) / len(sel), 2)})
+    return out
+
+
+def feature_reliability(graded):
+    """Diagnostic: does a raw feature (entry depth z_ou, latent drift, book
+    size) separate winners from losers WITHIN a signal? Per-signal realized hit
+    frequency bucketed across feature ranges; buckets with n<5 are suppressed.
+    Pure; no DB. NEVER used to size or gate — it only tells us which features
+    would be worth a future per-card model tilt."""
+    INF = float("inf")
+    out = {}
+    for sig in SIGS:
+        rows = [(g["pred"].get("feat") or {}, 1 if g["out"].get("hit") else 0)
+                for g in graded if g["sig"] == sig and g["out"].get("filled")]
+        if len(rows) < 10:
+            continue
+        feats = {}
+        if sig == "DIP":
+            z = [(f.get("z_ou"), y) for f, y in rows if f.get("z_ou") is not None]
+            b = _feat_buckets(z, [-INF, -2.5, INF], ["z_ou<-2.5", "z_ou>=-2.5"])
+            if b:
+                feats["z_ou"] = b
+            dr = [(f.get("drift_z"), y) for f, y in rows if f.get("drift_z") is not None]
+            b = _feat_buckets(dr, [-INF, -0.5, 0.5, INF],
+                              ["drift<-0.5", "drift -0.5..0.5", "drift>0.5"])
+            if b:
+                feats["drift_z"] = b
+        vd = sorted(f.get("vol_div") for f, _ in rows if f.get("vol_div") is not None)
+        if len(vd) >= 15:
+            t1, t2 = vd[len(vd) // 3], vd[2 * len(vd) // 3]
+            pairs = [(f.get("vol_div"), y) for f, y in rows if f.get("vol_div") is not None]
+            b = _feat_buckets(pairs, [-INF, t1, t2, INF],
+                              ["vol low", "vol mid", "vol high"])
+            if b:
+                feats["vol_div"] = b
+        if feats:
+            out[sig] = {"n": len(rows), "feats": feats}
+    return out
+
+
+def fill_by_hour(graded):
+    """Diagnostic: does the fill rate of resting entry orders swing with time
+    of day / day of week? Mean promised p_fill vs realized fill frequency per
+    UTC 6-hour band and weekday/weekend. Buckets with n<5 suppressed. Pure; no
+    DB. Never sizes — it just flags whether we quote into thin hours."""
+    def stat(rows):
+        n = len(rows)
+        return {"n": n, "p_fill_mean": round(sum(p for p, _ in rows) / n, 2),
+                "fill_freq": round(sum(y for _, y in rows) / n, 2)}
+    recs = []
+    for g in graded:
+        ts = g.get("ts") or ""
+        if len(ts) < 13:
+            continue
+        try:
+            wknd = datetime.fromisoformat(ts).weekday() >= 5
+        except ValueError:
+            continue
+        recs.append((int(ts[11:13]), wknd,
+                     g["pred"].get("p_fill", 0.5), 1 if g["out"].get("filled") else 0))
+    out = {"utc_band": [], "day": []}
+    for lab, lo, hi in (("00-06", 0, 6), ("06-12", 6, 12), ("12-18", 12, 18), ("18-24", 18, 24)):
+        sel = [(p, y) for h, _, p, y in recs if lo <= h < hi]
+        if len(sel) >= 5:
+            out["utc_band"].append({"band": lab, **stat(sel)})
+    for lab, wk in (("weekday", False), ("weekend", True)):
+        sel = [(p, y) for _, w, p, y in recs if w == wk]
+        if len(sel) >= 5:
+            out["day"].append({"day": lab, **stat(sel)})
+    return out if (out["utc_band"] or out["day"]) else {}
+
+
 def update_gates(gates, summary, adv):
     """Auto-gate signals that can't earn their keep. Two independent triggers,
     both with hysteresis; gated signals keep shadow-trading to earn their way

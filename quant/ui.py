@@ -97,7 +97,11 @@ svg{display:block;width:100%;height:60px;margin-top:8px}
 <tr><th>signal</th><th>graded</th><th>hit pred→real</th><th>avg edge</th><th>state</th></tr></thead><tbody></tbody></table>
 <div class="k" id="gatenote" style="margin-top:6px">gated signals keep shadow-trading; they earn their way back with evidence</div>
 <div id="relwrap" hidden style="margin-top:10px"><div class="k">model reliability — does a higher model estimate actually mean a higher hit rate?</div>
-<table id="rel"><thead><tr><th>signal</th><th>model band</th><th>n</th><th>est</th><th>real</th></tr></thead><tbody></tbody></table></div></section>
+<table id="rel"><thead><tr><th>signal</th><th>model band</th><th>n</th><th>est</th><th>real</th></tr></thead><tbody></tbody></table></div>
+<div id="featwrap" hidden style="margin-top:10px"><div class="k">feature reliability — which raw signals separate winners from losers (diagnostic only, never sizes)</div>
+<table id="feat"><thead><tr><th>signal</th><th>feature</th><th>bucket</th><th>n</th><th>real hit</th></tr></thead><tbody></tbody></table></div>
+<div id="fillwrap" hidden style="margin-top:10px"><div class="k">fill rate by time — do resting orders fill in thin hours? (diagnostic only)</div>
+<table id="fillh"><thead><tr><th>window</th><th>n</th><th>p_fill</th><th>real fill</th></tr></thead><tbody></tbody></table></div></section>
 <section><h2>Top candidates this poll</h2><table id="scan"><thead>
 <tr><th>item</th><th>sig</th><th>EV %</th><th>P(hit)</th><th>vol div/d</th></tr></thead><tbody></tbody></section>
 <section><h2>Pinned theses</h2><table id="pins"><tbody></tbody></table></section>
@@ -259,6 +263,16 @@ Object.entries(rel).forEach(([k,v])=>(v.buckets||[]).forEach(b=>relRows.push(
 `<tr><td>${k}</td><td>${b.lo}–${b.hi}</td><td>${b.n}</td><td>${b.p_mean}</td><td class="${cls((b.freq-b.p_mean))}">${b.freq}</td></tr>`)));
 $("#relwrap").hidden=!relRows.length;
 $("#rel tbody").innerHTML=relRows.join("");
+const fr=s.feature_rel||{};const frRows=[];
+Object.entries(fr).forEach(([sig,v])=>Object.entries(v.feats||{}).forEach(([fn,bs])=>bs.forEach(b=>frRows.push(
+`<tr><td>${sig}</td><td>${fn}</td><td>${esc(b.label)}</td><td>${b.n}</td><td>${b.freq}</td></tr>`))));
+$("#featwrap").hidden=!frRows.length;
+$("#feat tbody").innerHTML=frRows.join("");
+const fh=s.fill_hours||{};const fhRows=[];
+(fh.utc_band||[]).forEach(b=>fhRows.push(`<tr><td>${b.band} UTC</td><td>${b.n}</td><td>${b.p_fill_mean}</td><td class="${cls(b.fill_freq-b.p_fill_mean)}">${b.fill_freq}</td></tr>`));
+(fh.day||[]).forEach(b=>fhRows.push(`<tr><td>${b.day}</td><td>${b.n}</td><td>${b.p_fill_mean}</td><td class="${cls(b.fill_freq-b.p_fill_mean)}">${b.fill_freq}</td></tr>`));
+$("#fillwrap").hidden=!fhRows.length;
+$("#fillh tbody").innerHTML=fhRows.join("");
 $("#scan tbody").innerHTML=(s.scan||[]).map(r=>`<tr><td>${esc(r.item)}</td><td>${r.sig}</td>
 <td>${r.ev_pct}</td><td>${r.p_hit}</td><td>${r.vol_div}</td></tr>`).join("")
 ||"<tr><td colspan=5 class='k'>nothing passed</td></tr>";

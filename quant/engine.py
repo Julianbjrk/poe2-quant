@@ -14,7 +14,8 @@ from . import MODEL_V, store
 from .models import (best_ratio, daily_anchor, fee_pct, fit_ou, kf_drift_z,
                      kf_level, kf_new, kf_sd, kf_sig_h, kf_step, median,
                      weighted_median)
-from .score import (beta_mean, beta_sd, calib_apply, calib_default, graduation,
+from .score import (beta_mean, beta_sd, calib_apply, calib_default,
+                    feature_reliability, fill_by_hour, graduation,
                     model_reliability, summarize, today, trust_line, update_gates)
 from .util import (best_match, clamp, fmt_dur_h, fmt_ex, fmt_money, fmt_p,
                    fmt_pct, fmt_signed_ex, hours_between, now_iso)
@@ -326,11 +327,18 @@ def _poll(cfg, io, db_path, store_snap):
     if pair_note:
         errors.append(pair_note)
 
-    px, vol, fam = {}, {}, {}
+    px, vol, fam, tr7 = {}, {}, {}, {}
     for typ, d in data.items():
         for nm, p in d["price_ex"].items():
             px[nm], vol[nm], fam[nm] = p, d["vol_div"].get(nm) or 0.0, typ
+            tr7[nm] = (d.get("trend") or {}).get(nm)   # ninja 7d % change (was discarded)
     snap["chaos_ex"] = px.get("Chaos Orb")
+    # cross-source disagreement (free uncertainty signal): |ninja - pair exalted| / ninja
+    src_gap = {}
+    for nm, rts in routes.items():
+        pe = (rts.get("exalted") or {}).get("px_ex")
+        if pe and px.get(nm):
+            src_gap[nm] = abs(px[nm] - pe) / px[nm] * 100
 
     # ---- ticks (per source) --------------------------------------------
     cache = _tick_cache.get(path)
@@ -399,6 +407,7 @@ def _poll(cfg, io, db_path, store_snap):
                     "sd": kf_sd(st), "drift_z": kf_drift_z(st), "sig_h": kf_sig_h(st),
                     "ou": ou, "d14": d14, "m24": mm[0] if mm else None,
                     "sd24": mm[1] if mm else None, "n24": mm[2] if mm else 0,
+                    "trend7": tr7.get(nm), "src_gap_pct": src_gap.get(nm),
                     "dev": kf_level(st) - anchor}
     devs = [(r["dev"], r["vol_div"]) for r in rows.values() if r["item"] not in MAJORS]
     mkt_dev = weighted_median(devs) if devs else 0.0
@@ -596,7 +605,9 @@ def _poll(cfg, io, db_path, store_snap):
             "ret_mu": round(p["ret_mu"], 2), "ret_sd": round(p["ret_sd"], 2),
             "entry": p["entry_px"], "target": p.get("target_px"),
             "gap_pct": p.get("gap_pct"), "model": MODEL_V,
-            "feat": p.get("det", {})}, ts)
+            "feat": {**p.get("det", {}),
+                     "vol_div": round(p.get("vol_div") or 0),
+                     "hour": int(ts[11:13])}}, ts)
         shadow["orders"].append({"pid": pid, "card_id": cs["id"], "sig": p["sig"],
                                  "item": p["item"], "px": p["entry_px"],
                                  "target": p.get("target_px"), "qty": cs["size"]["qty"],
@@ -625,6 +636,8 @@ def _poll(cfg, io, db_path, store_snap):
     graded30 = store.predictions_graded(c, 30, model=MODEL_V)
     summary = summarize(graded30)
     reliability = model_reliability(graded30)
+    feature_rel = feature_reliability(graded30)
+    fill_hours = fill_by_hour(graded30)
     gates = update_gates(gates, summary, adv)
     store.kv_set_json(c, "gates", gates)
 
@@ -692,6 +705,7 @@ def _poll(cfg, io, db_path, store_snap):
                  | {"ev_pct": round(p["ev_pct"], 1), "p_hit": round(p["p_hit"], 2),
                     "vol_div": round(p["vol_div"] or 0)} for p in props[:12]],
         "gates": gates, "scoreboard": summary, "reliability": reliability,
+        "feature_rel": feature_rel, "fill_hours": fill_hours,
         "port": {**{k: v for k, v in port.items() if k != "positions"},
                  "deltas": deltas, "bench": bench,
                  "positions": [{"item": i, **{k: round(v, 3) if isinstance(v, float) else v
