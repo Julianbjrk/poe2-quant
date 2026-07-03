@@ -9,8 +9,8 @@ execution risk — they outrank statistical signals by construction.
 """
 import math
 
-from .models import (below_mean, fee_pct, ou_horizon, prob_ge, touch_median_h,
-                     touch_prob)
+from .models import (below_mean, fee_pct, ou_horizon, touch_median_h,
+                     touch_prob, touch_prob_drift)
 from .score import beta_mean, beta_sd
 from .util import Phi_inv, clamp, fmt_ex, fmt_pct
 
@@ -60,7 +60,12 @@ def dip(row, calib, adv):
         # touch within H, so the odds match reality by construction); keep the
         # model's own marginal as the p_model diagnostic.
         p_hit = clamp(beta_mean(calib["DIP"]["hit"]), 0.05, 0.92)
-        p_model = clamp(prob_ge(mu_H, sd_H, t_ln), 0.05, 0.92)
+        # p_model is the model's own probability of the GRADED event — a touch of
+        # target within H — via drifted first-passage (the endpoint marginal
+        # understated it). Diagnostic only; p_hit above is what sizes.
+        x0 = math.log(entry)
+        p_model = clamp(touch_prob_drift(t_ln - x0, (mu_H - x0) / H, sd_H / math.sqrt(H), H),
+                        0.05, 0.92)
         miss_px = math.exp(below_mean(mu_H, sd_H, t_ln))
         gain = (target / entry - 1) * 100 - fees
         loss = max((1 - miss_px / entry) * 100 + fees, 0.5)

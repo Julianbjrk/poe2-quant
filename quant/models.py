@@ -188,6 +188,22 @@ def touch_prob(dist_log, sig_h, H_h):
     return clamp(2.0 * (1.0 - Phi(dist_log / (sig_h * math.sqrt(H_h)))), 0.0, 0.95)
 
 
+def touch_prob_drift(d, mu, sig, T):
+    """P(a Brownian motion with drift mu and vol sig reaches level +d within T) —
+    the exact first-passage reflection formula. The graded DIP hit IS a touch of
+    target within H, so this is the right p_model diagnostic; the endpoint
+    marginal prob_ge understates it (a path can touch then retreat). Reduces to
+    the driftless touch_prob at mu=0. Same conservative 0.95 cap as the aggregator
+    data can justify. Diagnostic only — never sizes."""
+    if d <= 0:
+        return 0.95
+    if sig <= 1e-9 or T <= 0:
+        return 0.0
+    a = clamp(2.0 * mu * d / (sig * sig), -50.0, 50.0)
+    root = sig * math.sqrt(T)
+    return clamp(Phi((mu * T - d) / root) + math.exp(a) * Phi((-mu * T - d) / root), 0.0, 0.95)
+
+
 def touch_median_h(dist_log, sig_h):
     """Median first-passage time for distance d: P=0.5 ⇒ d/(σ√t)=Φ⁻¹(0.75)."""
     if dist_log <= 0:

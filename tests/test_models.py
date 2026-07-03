@@ -4,8 +4,9 @@ import unittest
 
 from quant.models import (best_ratio, fee_pct, fit_ou, kf_drift_z, kf_level,
                           kf_new, kf_sig_h, kf_step, ou_horizon, prob_ge,
-                          touch_median_h, touch_prob, weighted_median)
-from quant.util import snap_name
+                          touch_median_h, touch_prob, touch_prob_drift,
+                          weighted_median)
+from quant.util import Phi, snap_name
 
 
 class TestSnapName(unittest.TestCase):
@@ -162,6 +163,27 @@ class TestFill(unittest.TestCase):
     def test_touch_median_consistent(self):
         t = touch_median_h(0.02, 0.01)
         self.assertAlmostEqual(touch_prob(0.02, 0.01, t), 0.5, delta=0.02)
+
+
+class TestTouchDrift(unittest.TestCase):
+    def test_reduces_to_driftless_at_zero_mu(self):
+        d, sig, T = 0.03, 0.02, 24.0
+        expected = 2.0 * (1.0 - Phi(d / (sig * math.sqrt(T))))
+        self.assertAlmostEqual(touch_prob_drift(d, 0.0, sig, T), expected, places=9)
+        self.assertAlmostEqual(touch_prob_drift(d, 0.0, sig, T),
+                               touch_prob(d, sig, T), places=9)
+
+    def test_upward_drift_beats_endpoint_marginal(self):
+        # the graded event is a TOUCH within T; first-passage must be ≥ the
+        # endpoint marginal P(X_T ≥ d), which ignores paths that touch then retreat
+        d, mu, sig, T = 0.03, 0.001, 0.02, 24.0
+        marginal = 1.0 - Phi((d - mu * T) / (sig * math.sqrt(T)))
+        self.assertGreaterEqual(touch_prob_drift(d, mu, sig, T) + 1e-12, marginal)
+
+    def test_monotone_in_horizon(self):
+        d, mu, sig = 0.03, 0.0005, 0.02
+        self.assertGreater(touch_prob_drift(d, mu, sig, 48.0),
+                           touch_prob_drift(d, mu, sig, 6.0))
 
 
 class TestFees(unittest.TestCase):
