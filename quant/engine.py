@@ -112,6 +112,11 @@ def card_text(card, rate):
         head = f"CONVERT {item} — buy {s['qty']}×: set {r['give']} ex → {r['get']} ({fmt_ex(r['unit'])} ex each)"
         plan = (f"combine and sell the result — expected {fmt_signed_ex(s['profit_ex'], rate)}; "
                 f"works about {fmt_p(p['p_hit'])}")
+    elif p["sig"] == "TIDE":
+        pct = round((p["target_px"] / p["entry_px"] - 1) * 100)
+        head = f"ROTATE — convert ≈{fmt_money(s['spend_ex'], rate)} of ex into {s['qty']}× Divine Orb and hold"
+        plan = (f"sell divines back to ex when div/ex is up ~{pct}% (or the uptrend breaks) — "
+                f"works about {fmt_p(p['p_hit'])}, expected {fmt_signed_ex(s['profit_ex'], rate)} after est. fees")
     else:
         head = (f"BUY {s['qty']}× {item} — set {r['give']} ex → {r['get']} "
                 f"({fmt_ex(r['unit'])} ex each, ≈{fmt_money(s['spend_ex'], rate)} total)")
@@ -173,6 +178,11 @@ def _load_calib_versioned(c, adv):
     stored = store.kv_get(c, "calib_model")
     calib = store.kv_json(c, "calib")
     if calib is not None and stored == MODEL_V:
+        # ADDING a signal (Phase 2) must never KeyError or force a reset: backfill
+        # any signal missing from an older same-version calib at its prior, leaving
+        # every existing posterior untouched.
+        for sig, seed in calib_default(adv).items():
+            calib.setdefault(sig, seed)
         return calib, store.kv_json(c, "gates", {})
     if calib is not None:
         store.kv_set_json(c, "calib_archive:" + (stored or "unknown"), calib)
@@ -524,7 +534,8 @@ def _poll(cfg, io, db_path, store_snap):
         store.kv_set(c, "calib_decay_ts", ts)
     vol_floor = adv["min_volume_div_day"] * preset["vol_floor_x"]
     cand_rows = {nm: r for nm, r in rows.items() if nm not in MAJORS}
-    props = propose_all(cand_rows, routes, adv["recipes"], calib, adv, vol_floor)
+    props = propose_all(cand_rows, routes, adv["recipes"], calib, adv, vol_floor,
+                        majors_rows=rows)
 
     # pins → PIN proposals + watch table
     pins_view = []

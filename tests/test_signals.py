@@ -3,7 +3,7 @@ import unittest
 
 from quant.config import ADVANCED_DEFAULTS as ADV
 from quant.score import beta_mean, calib_default
-from quant.signals import dip, fill_blend, make, parity, propose_all, route
+from quant.signals import dip, fill_blend, make, parity, propose_all, route, tide
 
 CAL = calib_default(ADV)
 
@@ -116,6 +116,32 @@ class TestRoute(unittest.TestCase):
         self.assertIsNotNone(p)
         self.assertLess(p["p_fill"], 0.1)          # blend follows the ledger
         self.assertGreater(p["p_fill_model"], 0.9)  # touch model unchanged, kept as diagnostic
+
+
+class TestTide(unittest.TestCase):
+    def _div_row(self, drift_z=2.0, trend7=8.0, px=460.0):
+        return {"item": "Divine Orb", "px": px, "sig_h": 0.01,
+                "drift_z": drift_z, "trend7": trend7, "vol_div": 5000}
+
+    def test_emits_proposal_on_divine_uptrend(self):
+        p = tide(self._div_row(), CAL, ADV)
+        self.assertIsNotNone(p)
+        self.assertEqual(p["sig"], "TIDE")
+        self.assertEqual(p["item"], "Divine Orb")
+        self.assertGreater(p["target_px"], p["entry_px"])
+        self.assertGreater(p["target_px"], self._div_row()["px"])   # sell above current
+
+    def test_no_proposal_without_a_real_uptrend(self):
+        self.assertIsNone(tide(self._div_row(drift_z=0.5), CAL, ADV))   # drift below threshold
+        self.assertIsNone(tide(self._div_row(trend7=-3.0), CAL, ADV))   # 7d trend negative
+        self.assertIsNone(tide(None, CAL, ADV))
+
+    def test_becomes_positive_ev_once_persistence_is_proven(self):
+        # thin margin at the prior (entry premium + round-trip fees eat a 5% target);
+        # only a proven-persistent trend (high hit posterior) makes it card-worthy
+        cal = calib_default(ADV)
+        cal["TIDE"]["hit"] = [16.0, 2.0]        # history: div/ex uptrend persists ~89%
+        self.assertGreater(tide(self._div_row(), cal, ADV)["ev_pct"], 0)
 
 
 class TestFillBlend(unittest.TestCase):

@@ -61,9 +61,12 @@ ADVANCED_DEFAULTS = {
     "route_band_pct": 40,           # each book must sit within this of the exalted/ninja anchor
     "route_max_dev_pct": 25,        # a cross-book gap bigger than this is a distorted book, not arb
     "spread_capture_prior_pct": 6.0,
-    "hit_prior": {"DIP": [6, 4], "MAKE": [6, 5], "ROUTE": [7, 3], "PARITY": [8, 2]},  # Beta(a,b)
+    "hit_prior": {"DIP": [6, 4], "MAKE": [6, 5], "ROUTE": [7, 3], "PARITY": [8, 2],
+                  "TIDE": [5, 5]},  # Beta(a,b)
     "rev_frac_prior": [0.7, 0.15, 12],   # mean, sd, pseudo-n for DIP reversion fraction
-    "horizon_h": {"DIP": 72, "MAKE": 24, "ROUTE": 12, "PARITY": 12},
+    "horizon_h": {"DIP": 72, "MAKE": 24, "ROUTE": 12, "PARITY": 12, "TIDE": 72},
+    "tide_drift_z": 1.5,            # divine latent drift_z that triggers a TIDE (hold-divines) call
+    "tide_target_pct": 5,          # sell divines back to ex after div/ex rises this much
     "fill_window_h": 6,             # entry order must fill within this or expire
     "max_hold_h": 96,               # shadow positions force-marked after this
     "hysteresis": 0.8,              # active card survives until score < gate × this

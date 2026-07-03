@@ -115,10 +115,34 @@ def walk_daily(daily_map, adv):
             "sample": sorted(events, key=lambda e: e["z"])[:5]}
 
 
-def apply_priors(c, res, adv, log=print):
+def walk_trend(daily_map, adv, item="Divine Orb"):
+    """Walk-forward over the divine's daily ex price (div/ex): after a trailing
+    3-day rise of >+5%, does the NEXT 3 days keep rising (>+1%)? This measures
+    TIDE's hit rate — the persistence of a denomination uptrend — the same event
+    the live TIDE card is graded on. div/ex 165→461 in one league is exactly the
+    kind of run this catches."""
+    rows = daily_map.get(item) or []
+    series = [(d, a) for d, a, _ in rows if a and a > 0]
+    events = []
+    for t in range(3, len(series) - 3):
+        trail = series[t][1] / series[t - 3][1] - 1
+        if trail <= 0.05:
+            continue
+        fwd = series[t + 3][1] / series[t][1] - 1
+        events.append({"date": series[t][0], "trail3": round(trail, 3),
+                       "hit": 1 if fwd > 0.01 else 0})
+    hits = sum(e["hit"] for e in events)
+    n = len(events)
+    return {"events": n, "hits": hits,
+            "hit_rate": round(hits / n, 3) if n else None, "sample": events[:5]}
+
+
+def apply_priors(c, res, adv, log=print, tide_res=None):
     """Measured history becomes the PRIOR. Live graded outcomes, if any exist,
     have already moved the posterior — never stomp on real evidence."""
     store.kv_set_json(c, "calib_boot", res)
+    if tide_res:
+        store.kv_set_json(c, "calib_boot_tide", tide_res)
     graded = c.execute("SELECT COUNT(*) FROM predictions WHERE outcome IS NOT NULL").fetchone()[0]
     if not res["events"]:
         log("  no qualifying dip events in history — priors unchanged")
@@ -133,6 +157,12 @@ def apply_priors(c, res, adv, log=print):
     cal["DIP"]["hit"] = [round(res["hit_rate"] * n0 + 1, 2),
                          round((1 - res["hit_rate"]) * n0 + 1, 2)]
     cal["DIP"]["rev"] = [clamp(res["rev_mean"], 0.2, 1.2), 0.02, float(n0), 0.02 * float(n0)]
+    if tide_res and tide_res.get("events") and tide_res.get("hit_rate") is not None:
+        tn = min(PSEUDO_N_CAP, max(tide_res["events"] // 2, 4))
+        cal["TIDE"]["hit"] = [round(tide_res["hit_rate"] * tn + 1, 2),
+                              round((1 - tide_res["hit_rate"]) * tn + 1, 2)]
+        log(f"  TIDE prior set from history: div/ex uptrend persists "
+            f"{tide_res['hit_rate']:.0%} (pseudo-n {tn})")
     store.kv_set_json(c, "calib", cal)
     c.commit()
     log(f"  DIP priors set from history: hit {res['hit_rate']:.0%} "
@@ -154,10 +184,14 @@ def run(cfg, io=None, db_path=None, top_n=150, log=print, force=False):
     if n:
         log(f"  {n} items of daily history stored — the engine now has a league "
             "anchor from poll #1")
-    res = walk_daily(store.daily_all(c), cfg["adv"])
+    daily = store.daily_all(c)
+    res = walk_daily(daily, cfg["adv"])
     log(f"  walk-forward over history: {res['items']} items, {res['events']} dip "
         f"events, hit rate {res['hit_rate']}, mean reversion {res['rev_mean']}")
-    applied = apply_priors(c, res, cfg["adv"], log)
+    tide_res = walk_trend(daily, cfg["adv"])
+    log(f"  divine denomination trend: {tide_res['events']} up-runs, "
+        f"persistence {tide_res['hit_rate']}")
+    applied = apply_priors(c, res, cfg["adv"], log, tide_res=tide_res)
     if n:  # only mark done once we actually have history, so an offline first
         store.kv_set(c, "boot_done:" + league, today())  # run retries next launch
         c.commit()

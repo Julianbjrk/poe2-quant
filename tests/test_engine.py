@@ -306,6 +306,50 @@ class TestEngine(unittest.TestCase):
                                         (8, 106.), (10, 104.), (12, 103.)])
         self.assertEqual(out["touch"], 0)                           # never crossed 110
 
+    def test_tide_shadow_order_fills_and_grades_hit(self):
+        # a TIDE (hold-divines) order rests just above market, fills on the next
+        # tick, and grades a hit when div/ex crosses the +5% target — the same
+        # shadow machinery every other signal uses, no grading changes needed
+        import json
+        import quant.engine as eng
+        from quant.engine import shadow_process
+        c = store.connect(self.db)
+        cache = {}
+        t0 = datetime(2026, 6, 15, tzinfo=timezone.utc)
+        iso = lambda h: (t0 + timedelta(hours=h)).isoformat(timespec="seconds")
+        for h, px in [(0, 460.0), (1, 461.0), (2, 480.0), (3, 490.0)]:  # div/ex climbs
+            store.insert_ticks(c, iso(h), [("Divine Orb", "ninja", px, 5000)], cache)
+        store.predict_write(c, "p:t", "t", "TIDE", "Divine Orb",
+                            {"p_hit": 0.5, "p_model": 0.5, "H_h": 72.0,
+                             "entry": 464.6, "target": 483.0, "model": eng.MODEL_V})
+        c.commit()
+        shadow = {"orders": [{"pid": "p:t", "sig": "TIDE", "item": "Divine Orb",
+                  "px": 464.6, "target": 483.0, "qty": 1, "H_h": 72.0, "ts": iso(0)}],
+                  "pos": [], "watch": []}
+        calib = calib_default(self.cfg["adv"])
+        shadow_process(c, shadow, iso(3), self.cfg["adv"], calib)
+        out = json.loads(c.execute("SELECT outcome FROM predictions WHERE id='p:t'").fetchone()[0])
+        c.close()
+        self.assertEqual(out["filled"], 1)     # 461 ≤ 464.6 → the buy fills
+        self.assertEqual(out["hit"], 1)        # 490 ≥ 483 target within the horizon
+
+    def test_adding_a_signal_backfills_calib_without_touching_others(self):
+        # Phase 2 adds signals to an existing m3 calib: setdefault must add TIDE at
+        # its prior and leave every existing posterior exactly as it was
+        import quant.engine as eng
+        from quant.engine import _load_calib_versioned
+        c = store.connect(self.db)
+        cal = calib_default(self.cfg["adv"])
+        cal["DIP"]["hit"] = [18.0, 5.0]        # accumulated live evidence
+        del cal["TIDE"]                        # simulate a calib from before TIDE existed
+        store.kv_set_json(c, "calib", cal)
+        store.kv_set(c, "calib_model", eng.MODEL_V)
+        loaded, _ = _load_calib_versioned(c, self.cfg["adv"])
+        c.close()
+        self.assertIn("TIDE", loaded)                          # backfilled
+        self.assertEqual(loaded["TIDE"]["hit"], [5.0, 5.0])    # at its prior
+        self.assertEqual(loaded["DIP"]["hit"], [18.0, 5.0])    # untouched
+
     def test_model_bump_resets_and_guards_calibration(self):
         # the migration: a forecast-math change (MODEL_V) must archive + reset the
         # posteriors and gates, re-seed DIP from the last bootstrap, and NOT let

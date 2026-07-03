@@ -50,6 +50,22 @@ class TestWalk(unittest.TestCase):
         self.assertEqual(res["events"], 0)
 
 
+class TestWalkTrend(unittest.TestCase):
+    def test_persistent_divine_uptrend_measures_high(self):
+        from quant.bootstrap import walk_trend
+        # div/ex 165 → ~940 over the league: a strong, persistent denomination run
+        vals = [165.0 * (1.062 ** i) for i in range(30)]
+        res = walk_trend(universe({"Divine Orb": series(vals)}), ADV)
+        self.assertGreater(res["events"], 10)
+        self.assertGreaterEqual(res["hit_rate"], 0.9)
+
+    def test_flat_divine_has_no_trend_events(self):
+        from quant.bootstrap import walk_trend
+        res = walk_trend(universe({"Divine Orb": series([300.0] * 30)}), ADV)
+        self.assertEqual(res["events"], 0)
+        self.assertIsNone(res["hit_rate"])
+
+
 class TestApply(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

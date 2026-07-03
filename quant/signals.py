@@ -272,8 +272,49 @@ def parity(recipes, px_map, vol_map, calib, adv):
     return out
 
 
-def propose_all(rows, routes, recipes, calib, adv, vol_floor):
-    """rows: prepared per-item market rows. -> proposals, best EV first."""
+def tide(div_row, calib, adv):
+    """Denomination signal: when the divine trends UP versus ex (div/ex rising),
+    convert liquid ex into divines and HOLD, selling back after the rate lifts.
+    The app is otherwise blind to this — MAJORS are stripped from candidates — yet
+    div/ex 165→461 was the league's single best trade. Entry is market-style
+    (fills on the next tick), graded exactly like any other shadow forecast."""
+    if div_row is None:
+        return None
+    if div_row["drift_z"] < adv["tide_drift_z"] or (div_row.get("trend7") or 0) <= 0:
+        return None
+    px = div_row["px"]
+    entry = px * 1.01                       # market-style: a tick ≤ this fills the buy
+    target = px * (1 + adv["tide_target_pct"] / 100.0)
+    fees = _fees_rt(px, 1, adv)
+    day_sd_pct = div_row["sig_h"] * math.sqrt(24) * 100
+    gain = (target / entry - 1) * 100 - fees
+    if gain <= 0:
+        return None
+    loss = max(0.5 * day_sd_pct + fees, 1.0)
+    p_hit = clamp(beta_mean(calib["TIDE"]["hit"]), 0.05, 0.9)
+    ev = p_hit * gain - (1 - p_hit) * loss
+    p_fill_model = 0.9                       # market-style entry → near-certain fill
+    return {"sig": "TIDE", "item": "Divine Orb", "family": "denomination",
+            "entry_px": entry, "target_px": target,
+            "p_fill": fill_blend(p_fill_model, calib["TIDE"]["fill"]),
+            "p_fill_model": p_fill_model, "fill_h": 1.0,
+            "p_hit": p_hit, "p_model": p_hit, "H_h": float(adv["horizon_h"]["TIDE"]),
+            "gain_pct": gain, "loss_pct": loss, "ev_pct": ev,
+            "ret_mu": ev, "ret_sd": _ret_sd(p_hit, gain, loss),
+            "vol_div": div_row.get("vol_div") or 0,
+            "why": (f"divine trending up vs ex ({fmt_pct(div_row.get('trend7') or 0, signed=True)} "
+                    f"7d, drift z {div_row['drift_z']:.1f}) — convert ex to divines and hold, "
+                    f"sell back when div/ex +{adv['tide_target_pct']}% or the trend breaks"),
+            "det": {"drift_z": round(div_row["drift_z"], 2),
+                    "trend7": div_row.get("trend7"), "day_sd_pct": round(day_sd_pct, 2),
+                    "fees_pct": round(fees, 2)},
+            "deterministic": False}
+
+
+def propose_all(rows, routes, recipes, calib, adv, vol_floor, majors_rows=None):
+    """rows: prepared per-item market rows (MAJORS already stripped). majors_rows:
+    the full row map, so denomination signals over the majors (TIDE on the divine)
+    can still be proposed. -> proposals, best EV first."""
     props = []
     for row in rows.values():
         if row["vol_div"] < vol_floor:
@@ -291,5 +332,9 @@ def propose_all(rows, routes, recipes, calib, adv, vol_floor):
     px_map = {nm: r["px"] for nm, r in rows.items()}
     vol_map = {nm: r["vol_div"] for nm, r in rows.items()}
     props += parity(recipes, px_map, vol_map, calib, adv)
+    if majors_rows:
+        t = tide(majors_rows.get("Divine Orb"), calib, adv)
+        if t:
+            props.append(t)
     props.sort(key=lambda p: (p["deterministic"], p["ev_pct"]), reverse=True)
     return props
