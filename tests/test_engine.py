@@ -2,6 +2,7 @@
 Calm history → idiosyncratic dip → DIP card with literal ratio → shadow order
 fills on trade-through → target hit → prediction graded → calibration moves →
 paper resting order fills → position → SELL exit card."""
+import math
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -389,6 +390,52 @@ class TestEngine(unittest.TestCase):
         self.assertEqual(snap["status"]["slots_free"], 0)
         self.assertFalse([c_ for c_ in snap["cards"] if c_["act"] in ("DIP", "MAKE", "ROUTE", "PARITY")])
         self.assertIn("slots", snap["status"]["entries_reason"])
+
+    def test_stale_pair_quotes_are_not_re_fed_to_the_filter(self):
+        # LiveIO.pairs serves a cached book for ~55 min; the same pair quote must
+        # not be re-fed to the Kalman filter every 5-min poll. With the fix an
+        # unchanged pair quote is skipped, so the latent state is IDENTICAL to one
+        # that never saw the pair at all — while moving ninja obs still flow.
+        import quant.engine as eng
+        from quant.models import kf_level
+
+        class PairIO(FakeIO):
+            book = True
+
+            def pairs(self, league, rate):
+                if self.book:
+                    return {"Test Orb": {"exalted": {"px_ex": 80.0, "trades": 50,
+                                                     "value_ex": 0}}}, None
+                return {}, None
+
+        seq = [100.0, 101.0, 100.5, 102.0, 101.5, 103.0, 102.5, 104.0]
+        start = datetime.now(timezone.utc) - timedelta(hours=48)
+        # run A: a stale exalted book every poll. Pre-seed the cache so the (never
+        # changing) quote reads as a repeat from the very first poll → never fed.
+        dbA = str(Path(self.tmp.name) / "a.db")
+        ioA = PairIO(start)
+        eng._tick_cache[dbA] = {("Test Orb", "pairex"): 80.0}
+        for px in seq:
+            ioA.test_px = px
+            poll(self.cfg, ioA, db_path=dbA)
+            ioA.step(1)
+        # run B: no pair source at all, identical ninja sequence
+        dbB = str(Path(self.tmp.name) / "b.db")
+        ioB = PairIO(start)
+        ioB.book = False
+        for px in seq:
+            ioB.test_px = px
+            poll(self.cfg, ioB, db_path=dbB)
+            ioB.step(1)
+        cA = store.connect(dbA)
+        fA = store.kv_json(cA, "filters")["Test Orb"]
+        cA.close()
+        cB = store.connect(dbB)
+        fB = store.kv_json(cB, "filters")["Test Orb"]
+        cB.close()
+        self.assertAlmostEqual(fA["P"][0][0], fB["P"][0][0], delta=1e-9)   # stale pair inert
+        self.assertEqual(fA["n"], len(seq))                # exactly one obs/poll: ninja only
+        self.assertAlmostEqual(kf_level(fA), math.log(seq[-1]), delta=0.5)  # tracked ninja
 
     def test_unfilled_entry_expires_to_watch_then_grades_at_horizon(self):
         snap = self.play_script(dip_script())

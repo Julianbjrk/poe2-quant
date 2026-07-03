@@ -379,6 +379,21 @@ def _poll(cfg, io, db_path, store_snap):
             # vol slot carries TRADE COUNT for pair rows (div/day value for ninja
             # rows) — Task 3 replays pair books from this for ROUTE backtesting
             rows_t.append((item, PAIR_SRC.get(major, "pairex"), d["px_ex"], d["trades"]))
+    # Which observations are genuinely NEW since the last poll — decided against
+    # the dedupe cache BEFORE insert_ticks mutates it. LiveIO.pairs serves a
+    # cached book for ~55 min, so the same pair quote arrives ~11× per hour;
+    # re-feeding an unchanged quote to the filter as a fresh observation collapses
+    # posterior variance and drags the latent level toward an hour-old book. Ninja
+    # moves almost every poll and flows through untouched.
+    def _obs_is_new(key, px_):
+        prev = cache.get(key)
+        return prev is None or abs(prev - px_) >= 1e-12
+    changed = {(nm, "ninja") for nm, p in px.items() if _obs_is_new((nm, "ninja"), p)}
+    for item, rts in routes.items():
+        for major, d in rts.items():
+            src = PAIR_SRC.get(major, "pairex")
+            if d["px_ex"] > 0 and _obs_is_new((item, src), d["px_ex"]):
+                changed.add((item, src))
     n_ticks = store.insert_ticks(c, ts, rows_t, cache) if store_snap else 0
 
     # ---- latent filters -------------------------------------------------
@@ -388,11 +403,13 @@ def _poll(cfg, io, db_path, store_snap):
                1e-3, 48.0)
     obs_by_item = {}
     for nm, p in px.items():
-        obs_by_item.setdefault(nm, {})["ninja"] = math.log(p)
+        if (nm, "ninja") in changed:
+            obs_by_item.setdefault(nm, {})["ninja"] = math.log(p)
     for item, rts in routes.items():
         for major, d in rts.items():
-            if d["px_ex"] > 0:
-                obs_by_item.setdefault(item, {})[PAIR_SRC.get(major, "pairex")] = math.log(d["px_ex"])
+            src = PAIR_SRC.get(major, "pairex")
+            if d["px_ex"] > 0 and (item, src) in changed:
+                obs_by_item.setdefault(item, {})[src] = math.log(d["px_ex"])
     for item, obs in obs_by_item.items():
         st = filters.get(item)
         if st is None:
