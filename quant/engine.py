@@ -20,7 +20,7 @@ from .score import (beta_mean, beta_sd, calib_apply, calib_default, decay_calib,
                     today, trust_line, update_gates)
 from .util import (add_hours, best_match, clamp, fmt_dur_h, fmt_ex, fmt_money,
                    fmt_p, fmt_pct, fmt_signed_ex, hours_between, now_iso)
-from .signals import fill_blend, propose_all
+from .signals import REVERTING, TREND, fill_blend, propose_all
 
 _poll_lock = threading.Lock()
 _tick_cache = {}  # db_path -> {(item, source): last_px}
@@ -222,6 +222,18 @@ def _load_calib_versioned(c, adv):
     store.kv_set(c, "calib_model", MODEL_V)
     store.kv_set_json(c, "gates", {})
     return calib, {}
+
+
+def _blocked_signals(market_z, rate, circuit_z):
+    """Which signal classes are barred from producing CARDS this poll (shadow
+    booking is never blocked). A mania — the market far ABOVE its anchor — halts
+    MEAN-REVERSION but leaves trend signals, which are in their element; a crash
+    (far below) halts everything; no price feed halts everything."""
+    if not rate or market_z <= -circuit_z:
+        return REVERTING | TREND
+    if market_z >= circuit_z:
+        return REVERTING
+    return set()
 
 
 def _regime_step(c, rows, ts, dt_h, disp, adv, cache=None, store_snap=True):
@@ -698,7 +710,7 @@ def _poll(cfg, io, db_path, store_snap):
         shadow_per_sig[e["sig"]] = shadow_per_sig.get(e["sig"], 0) + 1
     sig_quota = adv["shadow_cap"] // 5 + 1
     new_cards, shadow_new = [], []
-    entries_off = circuit or not rate
+    blocked = _blocked_signals(market_z, rate, adv["circuit_z"])
     slots = max(0, min(adv["max_cards"], preset["max_positions"] - len(pos_now) - n_orders)
                 - len(kept))
     fams_used = {cs["prop"]["family"] for cs in kept}
@@ -708,7 +720,8 @@ def _poll(cfg, io, db_path, store_snap):
         gated = gates.get(p["sig"], {}).get("off")
         sized, why_not = size_card(p, calib, adv, preset, bankroll_ex, deployable,
                                    family_spent, rate)
-        if sized and not gated and not entries_off and slots > 0 and p["family"] not in fams_used:
+        if (sized and not gated and p["sig"] not in blocked and slots > 0
+                and p["family"] not in fams_used):
             cid = f"{p['sig']}:{p['item']}:{ts}"
             cs = {"id": cid, "born": ts, "prop": p, "size": sized, "grace": 2}
             new_cards.append(cs)
@@ -815,8 +828,12 @@ def _poll(cfg, io, db_path, store_snap):
     free_slots = max(0, preset["max_positions"] - len(pos_now) - n_orders)
     if not rate:
         entries_reason = "waiting for a price feed"
-    elif circuit:
-        entries_reason = "paused — the whole market is moving hard (circuit breaker)"
+    elif market_z <= -adv["circuit_z"]:
+        entries_reason = (f"all entries paused — market {market_z:+.1f}σ below its anchor "
+                          "(crash circuit breaker)")
+    elif market_z >= adv["circuit_z"]:
+        entries_reason = (f"mean-reversion paused: market {market_z:+.1f}σ above its anchor; "
+                          "trend signals (MOMO/TIDE/BASKET) still active")
     elif free_slots <= 0:
         entries_reason = (f"all {preset['max_positions']} position slots are in use "
                           f"({len(pos_now)} held, {n_orders} resting)")

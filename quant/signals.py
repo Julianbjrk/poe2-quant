@@ -15,6 +15,13 @@ from .score import beta_mean, beta_sd
 from .util import Phi_inv, clamp, fmt_ex, fmt_pct
 
 
+# signal classes for the class-aware circuit breaker: a mania (market far ABOVE
+# its anchor) should halt MEAN-REVERSION, not the trend signals that are in their
+# element; only a crash halts everything.
+REVERTING = {"DIP", "MAKE"}
+TREND = {"MOMO", "TIDE", "BASKET"}
+
+
 def _fees_rt(px, qty, adv, legs=2):
     return legs * fee_pct(px * max(qty, 1), adv["fee_curve"]) + adv["slippage_pct"]
 

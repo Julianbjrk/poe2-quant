@@ -534,6 +534,23 @@ class TestEngine(unittest.TestCase):
         c.close()
         self.assertAlmostEqual(lvl_after, lvl_before, places=9)   # no jump on the switch
 
+    def test_circuit_breaker_is_class_aware(self):
+        # a mania (market far ABOVE anchor) halts mean-reversion but leaves trend
+        # signals — which are in their element — free; a crash halts everything
+        from quant.engine import _blocked_signals
+        mania = _blocked_signals(3.0, 400.0, 2.5)
+        self.assertIn("DIP", mania)
+        self.assertIn("MAKE", mania)
+        self.assertNotIn("MOMO", mania)          # trend stays active
+        self.assertNotIn("TIDE", mania)
+        self.assertNotIn("BASKET", mania)
+        self.assertNotIn("ROUTE", mania)         # ROUTE/PARITY governed by their own gates
+        crash = _blocked_signals(-3.0, 400.0, 2.5)
+        for sig in ("DIP", "MAKE", "MOMO", "TIDE", "BASKET"):
+            self.assertIn(sig, crash)            # everything halted in a crash
+        self.assertEqual(_blocked_signals(0.5, 400.0, 2.5), set())      # calm blocks nothing
+        self.assertIn("MOMO", _blocked_signals(0.0, None, 2.5))         # no feed halts all
+
     def test_regime_step_writes_synthetic_basket_tick(self):
         from quant.engine import _regime_step
         c = store.connect(self.db)

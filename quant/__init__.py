@@ -1,3 +1,3 @@
 """QUANT — read-only PoE2 currency decision-support. Stdlib only."""
-__version__ = "1.5.4"
+__version__ = "1.5.5"
 MODEL_V = "m3"  # bumped whenever forecast math changes; stored on every prediction
