@@ -856,6 +856,21 @@ def _poll(cfg, io, db_path, store_snap):
         grad_pts = ([g for g in grad_pts if g["d"] != today()]
                     + [{"d": today(), "alpha": round(ports["paper"]["nw_div"] - worst_p, 3)}])[-90:]
         store.kv_set_json(c, "grad_points", grad_pts)
+    # idle copy: in a measured BULL trend, saying "nothing worth your divines" is a
+    # lie — idle exalted is losing to the trend. Report the regime and what the
+    # trend signals have MEASURED so far. CHOP keeps the plain line verbatim.
+    div_z = rows.get("Divine Orb", {}).get("drift_z")
+    if regime["state"] == "BULL":
+        tb = [g for g in graded30 if g["sig"] in ("TIDE", "BASKET") and g["out"].get("filled")]
+        measured = (f"measured hit {fmt_p(sum(1 for g in tb if g['out'].get('hit')) / len(tb))} "
+                    f"over {len(tb)}") if tb else "collecting"
+        idle_line = (f"Market regime: BULL — basket {regime['slope_ewma'] * 100:+.1f}%/day"
+                     + (f", div/ex drift z={div_z:.1f}" if div_z is not None else "")
+                     + f". Idle exalted is losing to the trend; TIDE/BASKET running in shadow "
+                     f"({measured}).")
+    else:
+        idle_line = ("Nothing worth your divines right now."
+                     + (f" {entries_reason.capitalize()}." if entries_reason else ""))
     snap.update({
         "errors": errors[:6], "circuit": circuit, "market_z": round(market_z, 2),
         "regime": {"state": regime["state"], "since": regime.get("since_ts"),
@@ -864,9 +879,7 @@ def _poll(cfg, io, db_path, store_snap):
         "grad": graduation(grad_pts, adv, mode),
         "cards": cards_ui, "status": status,
         "no_trade": None if any(c["act"] not in ("HOLD",) for c in cards_ui) else {
-            "checked": len(rows), "miss": miss,
-            "line": "Nothing worth your divines right now."
-                    + (f" {entries_reason.capitalize()}." if entries_reason else "")},
+            "checked": len(rows), "miss": miss, "line": idle_line},
         "scan": [{k: p[k] for k in ("sig", "item", "ev_pct", "p_hit", "vol_div")}
                  | {"ev_pct": round(p["ev_pct"], 1), "p_hit": round(p["p_hit"], 2),
                     "vol_div": round(p["vol_div"] or 0)}

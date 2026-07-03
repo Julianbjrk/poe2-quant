@@ -534,6 +534,28 @@ class TestEngine(unittest.TestCase):
         c.close()
         self.assertAlmostEqual(lvl_after, lvl_before, places=9)   # no jump on the switch
 
+    def test_bull_regime_replaces_the_idle_copy(self):
+        # in a measured BULL trend with no entry cards, the idle line must report
+        # the regime and the trend signals' progress — not "nothing worth your divines"
+        c = store.connect(self.db)
+        store.kv_set_json(c, "regime_idx", {
+            "weights": {"Alpha Orb": 1.0}, "weights_ts": self.io.now_iso(),
+            "last_lvl": {"Alpha Orb": math.log(50.0)}, "level": 1.05,
+            "regime": {"state": "BULL", "slope_ewma": 0.021, "streak": 12,
+                       "cand": "BULL", "since_ts": self.io.now_iso(), "disp": 0.02}})
+        c.commit()
+        c.close()
+        snap = self.run_poll()
+        self.assertFalse([cc for cc in snap["cards"] if cc["act"] not in ("HOLD",)])  # no entries
+        line = snap["no_trade"]["line"]
+        self.assertIn("BULL", line)
+        self.assertIn("shadow", line)
+        self.assertNotIn("Nothing worth your divines", line)
+
+    def test_chop_keeps_the_plain_idle_copy(self):
+        snap = self.run_poll()      # first poll: regime is CHOP
+        self.assertIn("Nothing worth your divines", snap["no_trade"]["line"])
+
     def test_circuit_breaker_is_class_aware(self):
         # a mania (market far ABOVE anchor) halts mean-reversion but leaves trend
         # signals — which are in their element — free; a crash halts everything
