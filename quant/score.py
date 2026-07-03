@@ -135,28 +135,40 @@ def summarize(graded):
     return out
 
 
+def _prob_buckets(pairs):
+    """pairs: [(p, y)] — a model probability and its realized 0/1 outcome. ->
+    calibration buckets (predicted band vs realized frequency), empty bands
+    dropped."""
+    out = []
+    for lo, hi in ((0.0, 0.4), (0.4, 0.6), (0.6, 0.8), (0.8, 1.01)):
+        sel = [(p, y) for p, y in pairs if lo <= p < hi]
+        if sel:
+            out.append({"lo": lo, "hi": min(hi, 1.0), "n": len(sel),
+                        "p_mean": round(sum(p for p, _ in sel) / len(sel), 2),
+                        "freq": round(sum(y for _, y in sel) / len(sel), 2)})
+    return out
+
+
 def model_reliability(graded):
-    """Per-signal: the model's own probability (p_model) bucketed against the
-    realized hit frequency. The displayed odds are the pooled calibrated rate
-    (one number per signal), so this is the diagnostic that reveals whether the
-    model adds per-card resolution — i.e. whether higher p_model really does mean
-    higher hit rate. If it does (monotone), a per-card model tilt becomes worth
-    reintroducing; until then we keep the honest pooled rate. Pure; no DB."""
+    """Per-signal: the model's own probabilities bucketed against realized
+    frequency. Two diagnostics: p_model vs hit (does a higher model estimate
+    really mean a higher hit rate — the precondition for a per-card tilt), and
+    p_fill_model vs fill (does the raw touch model predict fills — it did NOT for
+    ROUTE: ~0.95 predicted, ~0.03 realized, which is why the shown p_fill is now
+    the evidence-weighted blend, not this). The displayed odds are the pooled
+    calibrated/blended rates; these stay honest diagnostics. Pure; no DB."""
     out = {}
     for sig in SIGS:
-        rows = [(g["pred"].get("p_model"), 1 if g["out"].get("hit") else 0)
-                for g in graded if g["sig"] == sig
-                and g["out"].get("filled") and g["pred"].get("p_model") is not None]
-        if not rows:
+        hit_rows = [(g["pred"].get("p_model"), 1 if g["out"].get("hit") else 0)
+                    for g in graded if g["sig"] == sig
+                    and g["out"].get("filled") and g["pred"].get("p_model") is not None]
+        fill_rows = [(g["pred"].get("p_fill_model"), 1 if g["out"].get("filled") else 0)
+                     for g in graded if g["sig"] == sig
+                     and g["pred"].get("p_fill_model") is not None]
+        if not hit_rows and not fill_rows:
             continue
-        buckets = []
-        for lo, hi in ((0.0, 0.4), (0.4, 0.6), (0.6, 0.8), (0.8, 1.01)):
-            sel = [(p, y) for p, y in rows if lo <= p < hi]
-            if sel:
-                buckets.append({"lo": lo, "hi": min(hi, 1.0), "n": len(sel),
-                                "p_mean": round(sum(p for p, _ in sel) / len(sel), 2),
-                                "freq": round(sum(y for _, y in sel) / len(sel), 2)})
-        out[sig] = {"n": len(rows), "buckets": buckets}
+        out[sig] = {"n": len(hit_rows), "buckets": _prob_buckets(hit_rows),
+                    "n_fill": len(fill_rows), "fill_buckets": _prob_buckets(fill_rows)}
     return out
 
 

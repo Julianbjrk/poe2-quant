@@ -20,7 +20,7 @@ from .score import (beta_mean, beta_sd, calib_apply, calib_default,
                     today, trust_line, update_gates)
 from .util import (add_hours, best_match, clamp, fmt_dur_h, fmt_ex, fmt_money,
                    fmt_p, fmt_pct, fmt_signed_ex, hours_between, now_iso)
-from .signals import propose_all
+from .signals import fill_blend, propose_all
 
 _poll_lock = threading.Lock()
 _tick_cache = {}  # db_path -> {(item, source): last_px}
@@ -493,7 +493,8 @@ def _poll(cfg, io, db_path, store_snap):
             gain = (tgt / r["px"] - 1) * 100 - 2 * fee_pct(r["px"], adv["fee_curve"])
             p_hit = beta_mean(calib["PIN"]["hit"])
             props.insert(0, {"sig": "PIN", "item": nm, "family": r["family"],
-                             "entry_px": r["px"], "target_px": tgt, "p_fill": 0.9,
+                             "entry_px": r["px"], "target_px": tgt,
+                             "p_fill": fill_blend(0.9, calib["PIN"]["fill"]), "p_fill_model": 0.9,
                              "fill_h": 1.0, "p_hit": p_hit, "p_model": p_hit, "H_h": 48.0,
                              "gain_pct": gain, "loss_pct": max(gain / 2, 3.0),
                              "ev_pct": p_hit * gain - (1 - p_hit) * max(gain / 2, 3.0),
@@ -648,6 +649,7 @@ def _poll(cfg, io, db_path, store_snap):
         pid = "p:" + cs["id"]
         store.predict_write(c, pid, cs["id"], p["sig"], p["item"], {
             "p_fill": round(p["p_fill"], 3), "fill_h": round(p["fill_h"], 1),
+            "p_fill_model": round(p.get("p_fill_model", p["p_fill"]), 3),
             "p_hit": round(p["p_hit"], 3), "p_model": round(p.get("p_model", p["p_hit"]), 3),
             "H_h": p["H_h"],
             "ret_mu": round(p["ret_mu"], 2), "ret_sd": round(p["ret_sd"], 2),

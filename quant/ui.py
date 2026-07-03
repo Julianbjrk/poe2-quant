@@ -96,7 +96,7 @@ svg{display:block;width:100%;height:60px;margin-top:8px}
 <section><h2>Signals — measured, not assumed</h2><table id="sigs"><thead>
 <tr><th>signal</th><th>graded</th><th>hit pred→real</th><th>avg edge</th><th>state</th></tr></thead><tbody></tbody></table>
 <div class="k" id="gatenote" style="margin-top:6px">gated signals keep shadow-trading; they earn their way back with evidence</div>
-<div id="relwrap" hidden style="margin-top:10px"><div class="k">model reliability — does a higher model estimate actually mean a higher hit rate?</div>
+<div id="relwrap" hidden style="margin-top:10px"><div class="k">model reliability — does a higher model estimate actually mean a higher rate? (hit: model vs realized; fill: raw touch model vs realized fills — the shown p_fill is the evidence-weighted blend, not this)</div>
 <table id="rel"><thead><tr><th>signal</th><th>model band</th><th>n</th><th>est</th><th>real</th></tr></thead><tbody></tbody></table></div>
 <div id="touchwrap" hidden style="margin-top:10px"><div class="k">price-only reliability — did price reach target within H, unconditional on fill (diagnostic: selection-biased easy, never sized)</div>
 <table id="touch"><thead><tr><th>signal</th><th>model band</th><th>n</th><th>est</th><th>real touch</th></tr></thead><tbody></tbody></table></div>
@@ -261,8 +261,11 @@ $("#sigs tbody").innerHTML=Object.entries(sb).map(([k,v])=>`<tr><td>${k}</td><td
 $("#trustdetail").innerHTML=dett(Object.fromEntries(Object.entries(sb).map(([k,v])=>
 [k,`n=${v.n} fill ${v.fill_freq??"—"} hit ${v.hit_freq??"—"} edge ${v.edge_mean_pct??"—"}% crps ${v.crps??"—"}`])));
 const rel=s.reliability||{};const relRows=[];
-Object.entries(rel).forEach(([k,v])=>(v.buckets||[]).forEach(b=>relRows.push(
-`<tr><td>${k}</td><td>${b.lo}–${b.hi}</td><td>${b.n}</td><td>${b.p_mean}</td><td class="${cls((b.freq-b.p_mean))}">${b.freq}</td></tr>`)));
+Object.entries(rel).forEach(([k,v])=>{
+(v.buckets||[]).forEach(b=>relRows.push(
+`<tr><td>${k} hit</td><td>${b.lo}–${b.hi}</td><td>${b.n}</td><td>${b.p_mean}</td><td class="${cls((b.freq-b.p_mean))}">${b.freq}</td></tr>`));
+(v.fill_buckets||[]).forEach(b=>relRows.push(
+`<tr><td>${k} fill</td><td>${b.lo}–${b.hi}</td><td>${b.n}</td><td>${b.p_mean}</td><td class="${cls((b.freq-b.p_mean))}">${b.freq}</td></tr>`));});
 $("#relwrap").hidden=!relRows.length;
 $("#rel tbody").innerHTML=relRows.join("");
 const tr=s.touch_rel||{};const trRows=[];

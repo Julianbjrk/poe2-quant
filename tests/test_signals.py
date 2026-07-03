@@ -2,8 +2,8 @@ import math
 import unittest
 
 from quant.config import ADVANCED_DEFAULTS as ADV
-from quant.score import calib_default
-from quant.signals import dip, make, parity, propose_all, route
+from quant.score import beta_mean, calib_default
+from quant.signals import dip, fill_blend, make, parity, propose_all, route
 
 CAL = calib_default(ADV)
 
@@ -47,6 +47,16 @@ class TestDip(unittest.TestCase):
         self.assertIn("league-history", p["why"])
         self.assertEqual(p["H_h"], 72.0)
         self.assertLess(p["target_px"], 100.0)
+
+    def test_fill_prob_falls_with_distance_to_entry(self):
+        # entry derives from the LATENT level; fill is graded as ninja crossing
+        # entry within the window. A raw price sitting 3% above entry must show a
+        # materially lower p_fill than one sitting at entry (same latent state).
+        at_entry = dip(row(px=88.5), CAL, ADV)
+        far = dip(dict(row(px=88.5), px=88.5 * 1.03), CAL, ADV)  # raw px up, lvl fixed
+        self.assertIsNotNone(at_entry)
+        self.assertIsNotNone(far)
+        self.assertLess(far["p_fill"], at_entry["p_fill"])
 
 
 class TestMake(unittest.TestCase):
@@ -95,6 +105,29 @@ class TestRoute(unittest.TestCase):
         rts = {"exalted": {"px_ex": 100.0, "trades": 60, "value_ex": 6000},
                "divine": {"px_ex": 132.0, "trades": 40, "value_ex": 5280}}  # +32% > 25% ceiling
         self.assertIsNone(route("Test Orb", rts, row(px=100, theta=100), CAL, ADV))
+
+    def test_fill_prob_is_evidence_weighted(self):
+        # ROUTE quoted p_fill≈0.95 while realising ~3% over 406 forecasts. With its
+        # field posterior seeded, the SHOWN p_fill collapses to the measured rate
+        # while the raw touch model (a diagnostic) stays optimistic.
+        cal = calib_default(ADV)
+        cal["ROUTE"]["fill"] = [19.0, 391.0]      # ~5% of quotes actually filled
+        p = route("Test Orb", self.RTS, row(px=100, theta=100), cal, ADV)
+        self.assertIsNotNone(p)
+        self.assertLess(p["p_fill"], 0.1)          # blend follows the ledger
+        self.assertGreater(p["p_fill_model"], 0.9)  # touch model unchanged, kept as diagnostic
+
+
+class TestFillBlend(unittest.TestCase):
+    def test_returns_touch_model_at_untouched_prior(self):
+        # posterior still at its [7,3] prior -> no evidence -> pure touch model
+        self.assertAlmostEqual(fill_blend(0.95, [7.0, 3.0]), 0.95, places=9)
+        self.assertAlmostEqual(fill_blend(0.30, [7.0, 3.0]), 0.30, places=9)
+
+    def test_field_evidence_overrides_optimistic_touch(self):
+        blended = fill_blend(0.95, [19.0, 391.0])
+        self.assertLess(blended, 0.1)
+        self.assertGreater(blended, beta_mean([19.0, 391.0]) - 0.02)  # near the measured rate
 
 
 class TestParity(unittest.TestCase):

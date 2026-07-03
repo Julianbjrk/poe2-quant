@@ -23,6 +23,17 @@ def _ret_sd(p, gain, loss):
     return math.sqrt(max(p * (1 - p), 0.05)) * (gain + loss)
 
 
+def fill_blend(p_touch, fill_ab, prior=(7.0, 3.0), k0=15.0):
+    """Evidence-weighted fill probability. With no graded fills yet (the posterior
+    still equals its prior) it returns the touch model exactly; as real fills
+    accumulate it shifts toward the measured rate. This is the fix for ROUTE
+    quoting p_fill≈0.95 while realising 3% over 406 forecasts — with its field
+    posterior (~19 of 410 filled) the blend returns ≈0.05 no matter how confident
+    the touch model is. The touch model was the fantasy; the ledger is the truth."""
+    n_obs = max(fill_ab[0] + fill_ab[1] - (prior[0] + prior[1]), 0.0)
+    return (n_obs * beta_mean(fill_ab) + k0 * p_touch) / (n_obs + k0)
+
+
 def dip(row, calib, adv):
     ou = row.get("ou")
     fees = _fees_rt(row["lvl_ex"], 1, adv)
@@ -53,7 +64,6 @@ def dip(row, calib, adv):
         miss_px = math.exp(below_mean(mu_H, sd_H, t_ln))
         gain = (target / entry - 1) * 100 - fees
         loss = max((1 - miss_px / entry) * 100 + fees, 0.5)
-        dist = 0.10 * ou["sd_st"]
         why = (f"{fmt_pct((1 - entry / math.exp(ou['theta'])) * 100)} under its usual level — "
                "its own dip, not a family-wide one, and not in freefall")
         det = {"z_ou": round(z, 2), "idio_z": round(row["idio_z"], 2),
@@ -79,7 +89,6 @@ def dip(row, calib, adv):
         H = 72.0
         gain = (target / entry - 1) * 100 - fees
         loss = max(d["sd_st"] * 80, 1.0) + fees / 2
-        dist = 0.02 * d["sd_st"]
         why = (f"{fmt_pct((1 - entry / math.exp(d['theta'])) * 100)} under its league-history "
                f"norm ({d['n']} days) — intraday model still warming up")
         det = {"z_daily": round(z, 2), "idio_z": round(row["idio_z"], 2),
@@ -96,7 +105,6 @@ def dip(row, calib, adv):
         p_hit = clamp(0.45 + 0.04 * (-z24 - 2.2), 0.40, 0.58)  # young history: stay humble
         gain = (target / entry - 1) * 100 - fees
         loss = max(row["sd24"] / entry * 100 + fees, 1.0)
-        dist = 0.0
         why = "well under its 24h average — early-history read, sized down by lower confidence"
         det = {"z24": round(z24, 2), "n24": row["n24"], "fees_pct": round(fees, 2)}
         gap_pct = (target / entry - 1) * 100
@@ -107,10 +115,15 @@ def dip(row, calib, adv):
     if p_model is None:
         p_model = p_hit
     ev = p_hit * gain - (1 - p_hit) * loss
+    # fill is graded as ninja crossing entry_px within fill_window_h, so the touch
+    # distance is the real gap from current price to entry — not a latent-sd proxy
+    fdist = max(math.log(row["px"]) - math.log(entry), 0.0) + 1e-4
+    p_fill_model = touch_prob(fdist, row["sig_h"], adv["fill_window_h"])
     return {"sig": "DIP", "item": row["item"], "family": row["family"],
             "entry_px": entry, "target_px": target,
-            "p_fill": touch_prob(dist + 1e-4, row["sig_h"], adv["fill_window_h"]),
-            "fill_h": max(touch_median_h(dist + 1e-4, row["sig_h"]), 0.3),
+            "p_fill": fill_blend(p_fill_model, calib["DIP"]["fill"]),
+            "p_fill_model": p_fill_model,
+            "fill_h": max(touch_median_h(fdist, row["sig_h"]), 0.3),
             "p_hit": p_hit, "p_model": p_model, "H_h": H, "gain_pct": gain,
             "loss_pct": loss, "ev_pct": ev,
             "ret_mu": ev, "ret_sd": _ret_sd(p_hit, gain, loss), "gap_pct": gap_pct,
@@ -131,9 +144,12 @@ def make(row, calib, adv):
     loss = max(0.5 * sd_day_pct + fees / 2, 1.0)  # one-leg inventory risk
     ev = p_cycle * gain - (1 - p_cycle) * loss
     dist = spread / 200
+    # the fill grader watches one fill_window_h, not two — align the touch horizon
+    p_fill_model = touch_prob(dist, row["sig_h"], adv["fill_window_h"])
     return {"sig": "MAKE", "item": row["item"], "family": row["family"],
             "entry_px": bid, "target_px": ask,
-            "p_fill": touch_prob(dist, row["sig_h"], adv["fill_window_h"] * 2),
+            "p_fill": fill_blend(p_fill_model, calib["MAKE"]["fill"]),
+            "p_fill_model": p_fill_model,
             "fill_h": touch_median_h(dist, row["sig_h"]),
             "p_hit": p_cycle, "p_model": p_cycle, "H_h": float(adv["horizon_h"]["MAKE"]),
             "gain_pct": gain, "loss_pct": loss, "ev_pct": ev,
@@ -183,9 +199,11 @@ def route(item, rts, row, calib, adv):
     loss = fees + 1.0
     ev = p_hit * gain - (1 - p_hit) * loss
     sig_h = row["sig_h"] if row else 0.01
+    p_fill_model = touch_prob(1e-4, sig_h, adv["fill_window_h"])
     return {"sig": "ROUTE", "item": item, "family": (row or {}).get("family", "route"),
             "entry_px": cheap[1]["px_ex"], "target_px": rich[1]["px_ex"],
-            "p_fill": touch_prob(1e-4, sig_h, adv["fill_window_h"]), "fill_h": 1.0,
+            "p_fill": fill_blend(p_fill_model, calib["ROUTE"]["fill"]),
+            "p_fill_model": p_fill_model, "fill_h": 1.0,
             "p_hit": p_hit, "p_model": p_hit, "H_h": float(adv["horizon_h"]["ROUTE"]),
             "gain_pct": gain, "loss_pct": loss, "ev_pct": ev,
             "ret_mu": ev, "ret_sd": _ret_sd(p_hit, gain, loss),
@@ -228,9 +246,12 @@ def parity(recipes, px_map, vol_map, calib, adv):
         loss = fees + 1.0
         ev = p_hit * edge - (1 - p_hit) * loss
         vol = min(vol_map.get(give_nm) or 0, vol_map.get(get_nm) or 0)
+        p_fill_model = 0.85   # both legs are standing recipe conversions
         out.append({"sig": "PARITY", "item": give_nm, "family": "parity",
                     "entry_px": px_map[give_nm], "target_px": None,
-                    "p_fill": 0.85, "fill_h": 1.0, "p_hit": p_hit, "p_model": p_hit,
+                    "p_fill": fill_blend(p_fill_model, calib["PARITY"]["fill"]),
+                    "p_fill_model": p_fill_model, "fill_h": 1.0,
+                    "p_hit": p_hit, "p_model": p_hit,
                     "H_h": float(adv["horizon_h"]["PARITY"]),
                     "gain_pct": edge, "loss_pct": loss, "ev_pct": ev,
                     "ret_mu": ev, "ret_sd": _ret_sd(p_hit, edge, loss),
