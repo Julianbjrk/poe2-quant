@@ -311,7 +311,50 @@ def tide(div_row, calib, adv):
             "deterministic": False}
 
 
-def propose_all(rows, routes, recipes, calib, adv, vol_floor, majors_rows=None):
+def momo(row, calib, adv, regime):
+    """Momentum continuation: an item pushing UP through its own mean in a BULL
+    regime (the anti-DIP). Skeptical by design and gated to BULL only — chasing
+    trend in a flat or falling market is how you buy tops. Starts on probation
+    (gated) until the shadow book proves it hits at a calibrated rate."""
+    if regime != "BULL":
+        return None
+    ou = row.get("ou")
+    if not ou or ou["n"] < 24:
+        return None
+    if row["lvl"] <= ou["theta"] + 1.0 * ou["sd_st"]:          # must be ABOVE its mean
+        return None
+    if row["drift_z"] < adv["momo_drift_z"] or (row.get("trend7") or 0) < adv["momo_trend7"]:
+        return None
+    px = row["px"]
+    entry = px * 1.01                        # market-style: a tick ≤ this fills the buy
+    sd_day_pct = row["sig_h"] * math.sqrt(24) * 100
+    tgt_pct = clamp(2 * sd_day_pct, 4.0, 15.0)
+    target = px * (1 + tgt_pct / 100.0)
+    fees = _fees_rt(row["lvl_ex"], 1, adv)
+    gain = (target / entry - 1) * 100 - fees
+    if gain <= 0:
+        return None
+    loss = max(0.5 * sd_day_pct + fees, 1.0)
+    p_hit = clamp(beta_mean(calib["MOMO"]["hit"]), 0.05, 0.85)
+    ev = p_hit * gain - (1 - p_hit) * loss
+    p_fill_model = 0.9
+    return {"sig": "MOMO", "item": row["item"], "family": row["family"],
+            "entry_px": entry, "target_px": target,
+            "p_fill": fill_blend(p_fill_model, calib["MOMO"]["fill"]),
+            "p_fill_model": p_fill_model, "fill_h": 1.0,
+            "p_hit": p_hit, "p_model": p_hit, "H_h": float(adv["horizon_h"]["MOMO"]),
+            "gain_pct": gain, "loss_pct": loss, "ev_pct": ev,
+            "ret_mu": ev, "ret_sd": _ret_sd(p_hit, gain, loss), "vol_div": row["vol_div"],
+            "why": (f"pushing up through its mean in a BULL market "
+                    f"({fmt_pct(row.get('trend7') or 0, signed=True)} 7d, drift z "
+                    f"{row['drift_z']:.1f}) — momentum continuation, sized skeptically, on probation"),
+            "det": {"drift_z": round(row["drift_z"], 2), "trend7": row.get("trend7"),
+                    "z_ou": round((row["lvl"] - ou["theta"]) / ou["sd_st"], 2),
+                    "tgt_pct": round(tgt_pct, 1), "fees_pct": round(fees, 2)},
+            "deterministic": False}
+
+
+def propose_all(rows, routes, recipes, calib, adv, vol_floor, majors_rows=None, regime=None):
     """rows: prepared per-item market rows (MAJORS already stripped). majors_rows:
     the full row map, so denomination signals over the majors (TIDE on the divine)
     can still be proposed. -> proposals, best EV first."""
@@ -323,6 +366,9 @@ def propose_all(rows, routes, recipes, calib, adv, vol_floor, majors_rows=None):
             p = fn(row, calib, adv)
             if p:
                 props.append(p)
+        m = momo(row, calib, adv, regime)
+        if m:
+            props.append(m)
     for item, rts in routes.items():
         if item in ("Divine Orb", "Exalted Orb", "Chaos Orb"):
             continue

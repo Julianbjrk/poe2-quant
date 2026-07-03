@@ -350,6 +350,22 @@ class TestEngine(unittest.TestCase):
         self.assertEqual(loaded["TIDE"]["hit"], [5.0, 5.0])    # at its prior
         self.assertEqual(loaded["DIP"]["hit"], [18.0, 5.0])    # untouched
 
+    def test_momo_starts_on_probation_when_added(self):
+        # MOMO (trend chasing) must not fire until it proves calibrated: adding it
+        # to an existing calib seeds a gate-off, and the card path suppresses gated
+        # signals while the shadow book keeps grading them
+        import quant.engine as eng
+        from quant.engine import _load_calib_versioned
+        c = store.connect(self.db)
+        cal = calib_default(self.cfg["adv"])
+        del cal["MOMO"]
+        store.kv_set_json(c, "calib", cal)
+        store.kv_set(c, "calib_model", eng.MODEL_V)
+        store.kv_set_json(c, "gates", {})
+        _, gates = _load_calib_versioned(c, self.cfg["adv"])
+        c.close()
+        self.assertTrue(gates.get("MOMO", {}).get("off"))      # gated on arrival
+
     def test_model_bump_resets_and_guards_calibration(self):
         # the migration: a forecast-math change (MODEL_V) must archive + reset the
         # posteriors and gates, re-seed DIP from the last bootstrap, and NOT let

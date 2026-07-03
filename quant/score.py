@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 
 from .util import Phi, clamp, fmt_p, fmt_pct
 
-SIGS = ("DIP", "MAKE", "ROUTE", "PARITY", "PIN", "TIDE")
+SIGS = ("DIP", "MAKE", "ROUTE", "PARITY", "PIN", "TIDE", "MOMO")
 
 
 # ------------------------------------------------------- proper scores -----

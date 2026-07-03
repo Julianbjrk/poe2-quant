@@ -3,7 +3,8 @@ import unittest
 
 from quant.config import ADVANCED_DEFAULTS as ADV
 from quant.score import beta_mean, calib_default
-from quant.signals import dip, fill_blend, make, parity, propose_all, route, tide
+from quant.signals import (dip, fill_blend, make, momo, parity, propose_all,
+                           route, tide)
 
 CAL = calib_default(ADV)
 
@@ -142,6 +143,33 @@ class TestTide(unittest.TestCase):
         cal = calib_default(ADV)
         cal["TIDE"]["hit"] = [16.0, 2.0]        # history: div/ex uptrend persists ~89%
         self.assertGreater(tide(self._div_row(), cal, ADV)["ev_pct"], 0)
+
+
+class TestMomo(unittest.TestCase):
+    def _row(self, drift_z=2.5, trend7=12.0, above=True):
+        theta = math.log(100)
+        lvl = theta + (1.5 if above else -1.5) * 0.04     # above/below its own mean
+        return {"item": "Test Orb", "family": "Currency", "px": math.exp(lvl),
+                "lvl": lvl, "lvl_ex": math.exp(lvl), "sig_h": 0.02, "drift_z": drift_z,
+                "trend7": trend7, "vol_div": 2000,
+                "ou": {"theta": theta, "b": 0.9, "sd_st": 0.04, "n": 100}}
+
+    def test_fires_in_bull_on_upward_momentum(self):
+        p = momo(self._row(), CAL, ADV, "BULL")
+        self.assertIsNotNone(p)
+        self.assertEqual(p["sig"], "MOMO")
+        self.assertGreater(p["target_px"], p["entry_px"])
+
+    def test_never_fires_outside_bull(self):
+        self.assertIsNone(momo(self._row(), CAL, ADV, "CHOP"))
+        self.assertIsNone(momo(self._row(), CAL, ADV, "BEAR"))
+
+    def test_requires_price_above_its_mean(self):
+        self.assertIsNone(momo(self._row(above=False), CAL, ADV, "BULL"))  # that's DIP territory
+
+    def test_requires_drift_and_trend(self):
+        self.assertIsNone(momo(self._row(drift_z=1.0), CAL, ADV, "BULL"))
+        self.assertIsNone(momo(self._row(trend7=3.0), CAL, ADV, "BULL"))
 
 
 class TestFillBlend(unittest.TestCase):

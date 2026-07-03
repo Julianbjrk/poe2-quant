@@ -213,6 +213,24 @@ class TestGates(unittest.TestCase):
         update_gates(gates, summarize(_graded("DIP", 14, +3.0)), ADV)
         self.assertFalse(gates.get("DIP", {}).get("off", False))
 
+    def test_momo_probation_lifts_after_calibrated_fills(self):
+        # MOMO starts gated (probation); once ≥gate_fill_min fills hit at the shown
+        # (prior) rate, the hit-calibration branch un-gates it automatically
+        gates = {"MOMO": {"off": True}}
+        graded = [{"sig": "MOMO",
+                   "pred": {"p_fill": 0.9, "p_hit": 0.4, "ret_mu": 0.0, "ret_sd": 4},
+                   "out": {"filled": 1, "hit": 1 if i < 3 else 0, "realized_pct": 0.0}}
+                  for i in range(8)]              # 3/8 ≈ the promised 0.4
+        update_gates(gates, summarize(graded), ADV)
+        self.assertFalse(gates["MOMO"]["off"])
+
+    def test_momo_stays_gated_with_too_few_fills(self):
+        gates = {"MOMO": {"off": True}}
+        graded = [{"sig": "MOMO", "pred": {"p_fill": 0.9, "p_hit": 0.4},
+                   "out": {"filled": 1, "hit": 1}} for _ in range(4)]   # < gate_fill_min
+        update_gates(gates, summarize(graded), ADV)
+        self.assertTrue(gates["MOMO"]["off"])    # not enough evidence to lift probation
+
 
 class TestGraduation(unittest.TestCase):
     def test_needs_days_and_tstat(self):

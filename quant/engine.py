@@ -181,9 +181,13 @@ def _load_calib_versioned(c, adv):
         # ADDING a signal (Phase 2) must never KeyError or force a reset: backfill
         # any signal missing from an older same-version calib at its prior, leaving
         # every existing posterior untouched.
+        gates = store.kv_json(c, "gates", {})
         for sig, seed in calib_default(adv).items():
-            calib.setdefault(sig, seed)
-        return calib, store.kv_json(c, "gates", {})
+            if sig not in calib:
+                calib[sig] = seed
+                if sig == "MOMO":     # probation: gated until it proves calibrated
+                    gates.setdefault("MOMO", {"off": True})
+        return calib, gates
     if calib is not None:
         store.kv_set_json(c, "calib_archive:" + (stored or "unknown"), calib)
     calib = calib_default(adv)
@@ -535,7 +539,7 @@ def _poll(cfg, io, db_path, store_snap):
     vol_floor = adv["min_volume_div_day"] * preset["vol_floor_x"]
     cand_rows = {nm: r for nm, r in rows.items() if nm not in MAJORS}
     props = propose_all(cand_rows, routes, adv["recipes"], calib, adv, vol_floor,
-                        majors_rows=rows)
+                        majors_rows=rows, regime=regime["state"])
 
     # pins → PIN proposals + watch table
     pins_view = []
