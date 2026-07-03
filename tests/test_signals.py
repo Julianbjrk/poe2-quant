@@ -3,8 +3,8 @@ import unittest
 
 from quant.config import ADVANCED_DEFAULTS as ADV
 from quant.score import beta_mean, calib_default
-from quant.signals import (dip, fill_blend, make, momo, parity, propose_all,
-                           route, tide)
+from quant.signals import (basket, dip, fill_blend, make, momo, parity,
+                           propose_all, route, tide)
 
 CAL = calib_default(ADV)
 
@@ -170,6 +170,26 @@ class TestMomo(unittest.TestCase):
     def test_requires_drift_and_trend(self):
         self.assertIsNone(momo(self._row(drift_z=1.0), CAL, ADV, "BULL"))
         self.assertIsNone(momo(self._row(trend7=3.0), CAL, ADV, "BULL"))
+
+
+class TestBasket(unittest.TestCase):
+    def _idx(self, px=105.0):
+        return {"item": "__BASKET__", "px": px, "vol_div": 50000,
+                "members": {"A": 0.4, "B": 0.35, "C": 0.25}}
+
+    def test_advice_card_in_bull(self):
+        p = basket(self._idx(), CAL, ADV, "BULL")
+        self.assertIsNotNone(p)
+        self.assertEqual(p["sig"], "BASKET")
+        self.assertEqual(p["item"], "__BASKET__")
+        self.assertTrue(p["advice_only"])
+        self.assertGreater(p["target_px"], p["entry_px"])
+        self.assertIn("A 40%", p["why"])            # member spread executable by hand
+
+    def test_no_basket_outside_bull(self):
+        self.assertIsNone(basket(self._idx(), CAL, ADV, "CHOP"))
+        self.assertIsNone(basket(self._idx(), CAL, ADV, "BEAR"))
+        self.assertIsNone(basket(None, CAL, ADV, "BULL"))
 
 
 class TestFillBlend(unittest.TestCase):

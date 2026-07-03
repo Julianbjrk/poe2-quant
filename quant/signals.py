@@ -354,7 +354,46 @@ def momo(row, calib, adv, regime):
             "deterministic": False}
 
 
-def propose_all(rows, routes, recipes, calib, adv, vol_floor, majors_rows=None, regime=None):
+def basket(idx_row, calib, adv, regime):
+    """The volume-weighted market index, made FOLLOWABLE. In a BULL regime, spread
+    ex across the top members by weight and ride the index up. Graded like any item
+    via the synthetic __BASKET__ tick, but ADVICE-ONLY — no take button, because
+    it's a hand-executed spread, not a single order. This is the answer to a league
+    whose entire profit was in 'hold the basket' while the app said nothing."""
+    if regime != "BULL" or not idx_row or not idx_row.get("members"):
+        return None
+    px = idx_row["px"]
+    if px <= 0:
+        return None
+    entry = px * 1.01
+    target = px * (1 + adv["basket_target_pct"] / 100.0)
+    fees = 2 * fee_pct(px, adv["fee_curve"]) + adv["slippage_pct"]
+    gain = (target / entry - 1) * 100 - fees
+    if gain <= 0:
+        return None
+    p_hit = clamp(beta_mean(calib["BASKET"]["hit"]), 0.05, 0.85)
+    loss = max(0.75 * adv["basket_target_pct"] + fees, 1.0)
+    ev = p_hit * gain - (1 - p_hit) * loss
+    p_fill_model = 0.95
+    top = sorted(idx_row["members"].items(), key=lambda kv: -kv[1])[:6]
+    spread = ", ".join(f"{nm} {w * 100:.0f}%" for nm, w in top)
+    return {"sig": "BASKET", "item": "__BASKET__", "family": "index",
+            "entry_px": entry, "target_px": target,
+            "p_fill": fill_blend(p_fill_model, calib["BASKET"]["fill"]),
+            "p_fill_model": p_fill_model, "fill_h": 1.0,
+            "p_hit": p_hit, "p_model": p_hit, "H_h": float(adv["horizon_h"]["BASKET"]),
+            "gain_pct": gain, "loss_pct": loss, "ev_pct": ev,
+            "ret_mu": ev, "ret_sd": _ret_sd(p_hit, gain, loss),
+            "vol_div": idx_row.get("vol_div") or 0, "advice_only": True,
+            "why": (f"the market index is trending up (BULL) — spread ex across the top "
+                    f"members and ride it: {spread}"),
+            "det": {"members": dict(top), "target_pct": adv["basket_target_pct"],
+                    "fees_pct": round(fees, 2)},
+            "deterministic": False}
+
+
+def propose_all(rows, routes, recipes, calib, adv, vol_floor, majors_rows=None,
+                regime=None, basket_row=None):
     """rows: prepared per-item market rows (MAJORS already stripped). majors_rows:
     the full row map, so denomination signals over the majors (TIDE on the divine)
     can still be proposed. -> proposals, best EV first."""
@@ -382,5 +421,9 @@ def propose_all(rows, routes, recipes, calib, adv, vol_floor, majors_rows=None, 
         t = tide(majors_rows.get("Divine Orb"), calib, adv)
         if t:
             props.append(t)
+    if basket_row:
+        b = basket(basket_row, calib, adv, regime)
+        if b:
+            props.append(b)
     props.sort(key=lambda p: (p["deterministic"], p["ev_pct"]), reverse=True)
     return props

@@ -170,6 +170,8 @@ btn=c.closeable?`<button class="small" data-close="1" data-item="${esc(c.item)}"
 if(c.act==="CHECK")btn+=`<div class="matchbox" style="margin-top:8px"><a data-mtoggle="1">match to a scanned item ▸</a>`
 +`<div data-mbox hidden style="margin-top:6px;display:flex;gap:6px"><input data-minput placeholder="type the real item name" autocomplete="off">`
 +`<button class="small" data-mgo data-item="${esc(c.item)}">match</button></div></div>`;}
+else if(c.advice_only){
+btn=`<div class="resting">advice only — execute this spread by hand; the app tracks how it would have done</div>`;}
 else{const side=(c.act==="SELL"||c.act==="ABANDON")?"sell":"buy";
 const label=paper?(c.act==="ABANDON"?"Sell now (paper)":"Take it (paper)"):"I did it — log the fill";
 btn=`<button data-take="1" data-id="${esc(c.id)}" data-item="${esc(c.item)}" data-side="${side}"

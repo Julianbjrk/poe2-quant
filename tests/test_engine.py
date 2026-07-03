@@ -534,6 +534,55 @@ class TestEngine(unittest.TestCase):
         c.close()
         self.assertAlmostEqual(lvl_after, lvl_before, places=9)   # no jump on the switch
 
+    def test_regime_step_writes_synthetic_basket_tick(self):
+        from quant.engine import _regime_step
+        c = store.connect(self.db)
+        rows = {nm: {"item": nm, "vol_div": v, "lvl": math.log(p), "drift_z": 0.0}
+                for nm, p, v in [("A", 100.0, 5000), ("B", 50.0, 4000)]}
+        _regime_step(c, rows, "2026-06-01T00:00:00+00:00", 0.1, 0.02, self.cfg["adv"], cache={})
+        tick = c.execute("SELECT price_ex, vol_div FROM ticks WHERE item='__BASKET__'").fetchone()
+        c.close()
+        self.assertIsNotNone(tick)                       # synthetic tick written
+        self.assertAlmostEqual(tick[0], 100.0, delta=1.0)  # 100 × index level (~1.0 at start)
+        self.assertEqual(tick[1], 9000)                  # members' total volume
+
+    def test_basket_shadow_grades_hit_on_synthetic_tick(self):
+        import json
+        import quant.engine as eng
+        from quant.engine import shadow_process
+        c = store.connect(self.db)
+        cache = {}
+        t0 = datetime(2026, 6, 20, tzinfo=timezone.utc)
+        iso = lambda h: (t0 + timedelta(hours=h)).isoformat(timespec="seconds")
+        for h, px in [(0, 100.0), (1, 101.0), (2, 105.0), (3, 108.0)]:   # index climbs
+            store.insert_ticks(c, iso(h), [("__BASKET__", "ninja", px, 50000)], cache)
+        store.predict_write(c, "p:b", "b", "BASKET", "__BASKET__",
+                            {"p_hit": 0.5, "p_model": 0.5, "H_h": 72.0,
+                             "entry": 101.0, "target": 106.0, "model": eng.MODEL_V})
+        c.commit()
+        shadow = {"orders": [{"pid": "p:b", "sig": "BASKET", "item": "__BASKET__",
+                  "px": 101.0, "target": 106.0, "qty": 1, "H_h": 72.0, "ts": iso(0)}],
+                  "pos": [], "watch": []}
+        calib = calib_default(self.cfg["adv"])
+        shadow_process(c, shadow, iso(3), self.cfg["adv"], calib)
+        out = json.loads(c.execute("SELECT outcome FROM predictions WHERE id='p:b'").fetchone()[0])
+        c.close()
+        self.assertEqual(out["filled"], 1)               # 101 ≤ 101 entry → fills
+        self.assertEqual(out["hit"], 1)                  # 108 ≥ 106 target
+
+    def test_basket_synthetic_row_never_leaks_as_tradable(self):
+        self.run_poll()
+        self.io.step(1)
+        snap = self.run_poll()
+        c = store.connect(self.db)
+        names = store.kv_json(c, "item_names") or []
+        n_basket = c.execute("SELECT COUNT(*) FROM ticks WHERE item='__BASKET__'").fetchone()[0]
+        c.close()
+        self.assertGreater(n_basket, 0)                                    # tick IS written
+        self.assertFalse([n for n in names if n.startswith("__")])          # never scannable
+        self.assertFalse([r for r in snap["scan"] if r["item"].startswith("__")])  # never in scan
+        self.assertNotIn("__BASKET__", [p["item"] for p in snap["port"]["positions"]])
+
     def test_unfilled_entry_expires_to_watch_then_grades_at_horizon(self):
         snap = self.play_script(dip_script())
         self.assertTrue([c for c in snap["cards"] if c["act"] == "DIP"])

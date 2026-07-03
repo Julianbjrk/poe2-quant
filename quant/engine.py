@@ -68,6 +68,18 @@ def size_card(p, calib, adv, preset, bankroll_ex, deployable_ex, family_spent, r
     f = preset["kelly_frac"] * min(kelly, 0.5)
     if f <= 0:
         return None, "edge too thin for any size once uncertainty is priced"
+    if p.get("advice_only"):
+        # a hand-executed spread (BASKET), not a single order: size the total ex to
+        # deploy but skip the exchange-ratio machinery — there is nothing to fill
+        spend = min(f * bankroll_ex, deployable_ex)
+        profit = spend * p["ev_pct"] / 100
+        if profit < adv["min_profit_ex"]:
+            return None, (f"expected {fmt_ex(profit)} ex across the basket — under the "
+                          f"{adv['min_profit_ex']} ex floor")
+        return {"qty": round(spend / max(p["entry_px"], 1e-6), 2), "spend_ex": round(spend, 1),
+                "profit_ex": round(profit, 1), "ratio": None, "sell_ratio": None,
+                "kelly": round(kelly, 3),
+                "size_note": f"advice: spread {fmt_money(spend, rate)} across the basket by weight"}, None
     vol_cap = (p["vol_div"] or 0) * (rate or 0) * adv["max_pos_pct_volume"] / 100
     fam_cap = max(bankroll_ex * 0.4 - family_spent.get(p["family"], 0.0), 0)
     spend_cap = min(f * bankroll_ex, vol_cap, deployable_ex, fam_cap)
@@ -117,6 +129,13 @@ def card_text(card, rate):
         head = f"ROTATE — convert ≈{fmt_money(s['spend_ex'], rate)} of ex into {s['qty']}× Divine Orb and hold"
         plan = (f"sell divines back to ex when div/ex is up ~{pct}% (or the uptrend breaks) — "
                 f"works about {fmt_p(p['p_hit'])}, expected {fmt_signed_ex(s['profit_ex'], rate)} after est. fees")
+    elif p["sig"] == "BASKET":
+        mem = p["det"].get("members", {})
+        spread = " · ".join(f"{nm} {w * 100:.0f}%" for nm, w in
+                            sorted(mem.items(), key=lambda kv: -kv[1]))
+        head = f"BASKET — spread ≈{fmt_money(s['spend_ex'], rate)} of ex across the index and hold"
+        plan = (f"by weight: {spread}. Sell back when the index is up ~{p['det']['target_pct']}% "
+                f"or the market turns — advice only, execute by hand")
     else:
         head = (f"BUY {s['qty']}× {item} — set {r['give']} ex → {r['get']} "
                 f"({fmt_ex(r['unit'])} ex each, ≈{fmt_money(s['spend_ex'], rate)} total)")
@@ -205,12 +224,14 @@ def _load_calib_versioned(c, adv):
     return calib, {}
 
 
-def _regime_step(c, rows, ts, dt_h, disp, adv):
+def _regime_step(c, rows, ts, dt_h, disp, adv, cache=None, store_snap=True):
     """Maintain a rolling volume-weighted index (top-20, weights refreshed weekly)
     and update the market regime from its return. The index is CHAIN-LINKED: on a
     weight refresh the per-member reference levels reset to the current levels, so
     the switch books no spurious return and levels are never compared across
-    weight sets. Returns the regime state dict. Diagnostic; nothing gates on it."""
+    weight sets. Also writes a synthetic __BASKET__ tick each poll so the index is
+    followable and gradeable like any item. Returns the regime state dict.
+    Diagnostic; nothing gates on it."""
     ridx = store.kv_json(c, "regime_idx", {})
     cand = {nm: r for nm, r in rows.items() if nm not in MAJORS and r["vol_div"] > 0}
     stale = (not ridx.get("weights") or hours_between(
@@ -238,6 +259,13 @@ def _regime_step(c, rows, ts, dt_h, disp, adv):
     reg = regime_update(ridx.get("regime"), dt_h, idx_ret,
                         div["drift_z"] if div else 0.0, disp, ts)
     ridx["regime"] = reg
+    # synthetic basket tick: price = 100 × index level, vol = members' total. It
+    # is a real ticks row so basket forecasts grade through the same crossed() path
+    # every signal uses — but __-prefixed, so it never appears as a tradable.
+    tot_vol = sum(rows[nm]["vol_div"] for nm in w if nm in rows)
+    ridx["basket_px"], ridx["basket_vol"] = 100.0 * ridx["level"], tot_vol
+    if store_snap and cache is not None and w:
+        store.insert_ticks(c, ts, [("__BASKET__", "ninja", ridx["basket_px"], tot_vol)], cache)
     store.kv_set_json(c, "regime_idx", ridx)
     return reg
 
@@ -523,7 +551,7 @@ def _poll(cfg, io, db_path, store_snap):
         r["fam_z"] = fam_dev.get(r["family"], 0.0) / sd_typ
     market_z = mkt_dev / sd_typ
     circuit = abs(market_z) >= adv["circuit_z"]
-    regime = _regime_step(c, rows, ts, dt, sd_typ, adv)
+    regime = _regime_step(c, rows, ts, dt, sd_typ, adv, cache=cache, store_snap=store_snap)
 
     # ---- calibration + proposals ----------------------------------------
     calib, gates = _load_calib_versioned(c, adv)
@@ -538,8 +566,12 @@ def _poll(cfg, io, db_path, store_snap):
         store.kv_set(c, "calib_decay_ts", ts)
     vol_floor = adv["min_volume_div_day"] * preset["vol_floor_x"]
     cand_rows = {nm: r for nm, r in rows.items() if nm not in MAJORS}
+    ridx = store.kv_json(c, "regime_idx", {})
+    basket_row = ({"item": "__BASKET__", "px": ridx["basket_px"],
+                   "vol_div": ridx.get("basket_vol", 0), "members": ridx.get("weights", {})}
+                  if ridx.get("basket_px") else None)
     props = propose_all(cand_rows, routes, adv["recipes"], calib, adv, vol_floor,
-                        majors_rows=rows, regime=regime["state"])
+                        majors_rows=rows, regime=regime["state"], basket_row=basket_row)
 
     # pins → PIN proposals + watch table
     pins_view = []
@@ -774,8 +806,9 @@ def _poll(cfg, io, db_path, store_snap):
                                  "fill_h": round(p["fill_h"], 1), "p_hit": round(p["p_hit"], 2),
                                  "ev_pct": round(p["ev_pct"], 2), "model": MODEL_V,
                                  "size": s["size_note"], "kelly": s["kelly"],
-                                 "ratio_err_pct": s["ratio"]["err_pct"]},
-                         "sig": p["sig"], "deterministic": p["deterministic"]})
+                                 "ratio_err_pct": s["ratio"]["err_pct"] if s.get("ratio") else None},
+                         "sig": p["sig"], "advice_only": p.get("advice_only", False),
+                         "deterministic": p["deterministic"]})
     cards_ui += holds
     # always-on status: what the engine is doing right now, cards or not — so an
     # empty board is never a mystery (see point: "no way for me to tell")
@@ -819,7 +852,8 @@ def _poll(cfg, io, db_path, store_snap):
                     + (f" {entries_reason.capitalize()}." if entries_reason else "")},
         "scan": [{k: p[k] for k in ("sig", "item", "ev_pct", "p_hit", "vol_div")}
                  | {"ev_pct": round(p["ev_pct"], 1), "p_hit": round(p["p_hit"], 2),
-                    "vol_div": round(p["vol_div"] or 0)} for p in props[:12]],
+                    "vol_div": round(p["vol_div"] or 0)}
+                 for p in props if not p["item"].startswith("__")][:12],
         "gates": gates, "scoreboard": summary, "reliability": reliability,
         "feature_rel": feature_rel, "fill_hours": fill_hours, "touch_rel": touch_rel,
         "port": {**{k: v for k, v in port.items() if k != "positions"},
@@ -838,8 +872,9 @@ def _poll(cfg, io, db_path, store_snap):
         # canonical item names for the trade-form autocomplete + server-side
         # snapping: everything the scanner prices, plus anything you hold/traded
         fill_items = {f["item"] for f in store.fills(c, "paper") + store.fills(c, "real")}
-        names = sorted(set(px) | set(pos_now) | fill_items
+        names = sorted(nm for nm in (set(px) | set(pos_now) | fill_items
                        | {p["item"] for p in pins_view if p.get("item")})
+                       if not nm.startswith("__"))    # synthetic rows (__BASKET__) are never tradable
         store.kv_set_json(c, "item_names", names)
         store.snap_write(c, ts, {"ts": ts, "nw_div": port["nw_div"], "mode": mode,
                                  "ex_per_div": rate, "deltas": deltas})
