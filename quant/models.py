@@ -213,6 +213,33 @@ def touch_median_h(dist_log, sig_h):
     return (dist_log / (0.6745 * sig_h)) ** 2
 
 
+# ----------------------------------------------------------- regime --------
+def regime_update(prev, dt_h, idx_ret, div_drift_z, disp, ts=None):
+    """Pure market-regime classifier. prev: {state, slope_ewma, streak, cand,
+    since_ts, disp} or None. idx_ret is this poll's volume-weighted index log
+    return. Keeps an EWMA of the per-DAY index slope (48h half-life, for display)
+    and flips state only after a direction holds for >=6 consecutive polls
+    (hysteresis — a single-poll spike never flips it). BULL when the smoothed
+    slope > +1%/day or divine drift_z > +1.5; BEAR mirrored; else CHOP.
+    Diagnostic: nothing gates on the regime yet."""
+    st = (dict(prev) if prev else
+          {"state": "CHOP", "slope_ewma": 0.0, "streak": 0, "cand": "CHOP",
+           "since_ts": ts, "disp": disp})
+    dt_h = max(dt_h, 1e-3)
+    a = 1.0 - 0.5 ** (dt_h / 48.0)
+    st["slope_ewma"] = (1 - a) * st["slope_ewma"] + a * (idx_ret * 24.0 / dt_h)
+    st["disp"] = disp
+    up = st["slope_ewma"] > 0.01 or (div_drift_z or 0.0) > 1.5
+    down = st["slope_ewma"] < -0.01 or (div_drift_z or 0.0) < -1.5
+    cand = "BULL" if up and not down else "BEAR" if down and not up else "CHOP"
+    st["streak"] = st["streak"] + 1 if cand == st.get("cand") else 1
+    st["cand"] = cand
+    if cand != st["state"] and st["streak"] >= 6:
+        st["state"] = cand
+        st["since_ts"] = ts
+    return st
+
+
 # ------------------------------------------------------ ratio quantizer ----
 def best_ratio(price_ex, side, max_lot=20, tol_pct=4.0, good_pct=0.5):
     """Nearest in-game ratio that does not cross the limit.

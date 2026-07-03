@@ -449,6 +449,31 @@ class TestEngine(unittest.TestCase):
         self.assertEqual(fA["n"], len(seq))                # exactly one obs/poll: ninja only
         self.assertAlmostEqual(kf_level(fA), math.log(seq[-1]), delta=0.5)  # tracked ninja
 
+    def test_regime_index_chain_links_across_weight_change(self):
+        # the rolling index must NOT jump when its top-20 membership is refreshed
+        # (weekly): weights change but levels are never compared across weight sets
+        from quant.engine import _regime_step
+        c = store.connect(self.db)
+        adv = self.cfg["adv"]
+        t0 = datetime(2026, 6, 1, tzinfo=timezone.utc)
+        iso = lambda h: (t0 + timedelta(hours=h)).isoformat(timespec="seconds")
+
+        def rows_at(prices, vols):
+            return {nm: {"item": nm, "vol_div": vols[nm], "lvl": math.log(prices[nm]),
+                         "drift_z": 0.0} for nm in prices}
+        v1 = {"A": 5000, "B": 4000, "C": 3000}
+        _regime_step(c, rows_at({"A": 100.0, "B": 50.0, "C": 25.0}, v1), iso(0), 0.1, 0.02, adv)
+        _regime_step(c, rows_at({"A": 102.0, "B": 51.0, "C": 25.2}, v1), iso(1), 1.0, 0.02, adv)
+        lvl_before = store.kv_json(c, "regime_idx")["level"]
+        self.assertNotAlmostEqual(lvl_before, 1.0)          # the index actually moved
+        # >168h later a different set is liquid → weight refresh on this poll
+        p3 = {"A": 103.0, "B": 51.5, "C": 25.3, "D": 10.0, "E": 8.0, "F": 6.0}
+        v3 = {"A": 100, "B": 100, "C": 100, "D": 9000, "E": 8000, "F": 7000}
+        _regime_step(c, rows_at(p3, v3), iso(200), 1.0, 0.02, adv)
+        lvl_after = store.kv_json(c, "regime_idx")["level"]
+        c.close()
+        self.assertAlmostEqual(lvl_after, lvl_before, places=9)   # no jump on the switch
+
     def test_unfilled_entry_expires_to_watch_then_grades_at_horizon(self):
         snap = self.play_script(dip_script())
         self.assertTrue([c for c in snap["cards"] if c["act"] == "DIP"])

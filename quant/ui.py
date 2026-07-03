@@ -289,8 +289,13 @@ $("#scan tbody").innerHTML=(s.scan||[]).map(r=>`<tr><td>${esc(r.item)}</td><td>$
 $("#pins tbody").innerHTML=(s.pins||[]).map(p=>`<tr><td>${esc(p.label)}</td><td>${p.px??"no match"}</td>
 <td class="k">entry≤${p.entry??"—"} exit≥${p.exit??"—"}</td></tr>`).join("")||"<tr><td class='k'>none — add pins in config.json</td></tr>";
 $("#s_risk").value=D.cfg.risk;$("#s_mode").value=D.cfg.mode;
-const st=s.stats||{};$("#diag").innerHTML=[`scanned ${st.scanned} items · ${st.proposals} proposals · shadow book ${st.shadow_open} open · ${st.graded_30d} graded/30d`,
+const st=s.stats||{};const rg=s.regime;let rgline="";
+if(rg&&rg.state){const since=rg.since?new Date(rg.since):null;
+const days=since&&!isNaN(since)?Math.max(0,Math.round((Date.now()-since.getTime())/864e5)):null;
+rgline=`regime: <b>${rg.state}</b>${days!=null?" for "+days+"d":""} · basket ${rg.slope_pct_day>=0?"+":""}${rg.slope_pct_day}%/day`;}
+$("#diag").innerHTML=[`scanned ${st.scanned} items · ${st.proposals} proposals · shadow book ${st.shadow_open} open · ${st.graded_30d} graded/30d`,
 `market move ${s.market_z} of normal${s.circuit?" — CIRCUIT BREAKER: entries paused":""} · basket index ${st.index}`,
+...(rgline?[rgline]:[]),
 ...(s.errors||[]).map(e=>"warn: "+esc(e))].join("<br>");
 const h=(D.hist||[]).filter(x=>x.nw!=null);if(h.length>1){const ys=h.map(p=>p.nw);
 const mn=Math.min(...ys),mx=Math.max(...ys);

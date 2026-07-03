@@ -4,8 +4,8 @@ import unittest
 
 from quant.models import (best_ratio, fee_pct, fit_ou, kf_drift_z, kf_level,
                           kf_new, kf_sig_h, kf_step, ou_horizon, prob_ge,
-                          touch_median_h, touch_prob, touch_prob_drift,
-                          weighted_median)
+                          regime_update, touch_median_h, touch_prob,
+                          touch_prob_drift, weighted_median)
 from quant.util import Phi, snap_name
 
 
@@ -184,6 +184,32 @@ class TestTouchDrift(unittest.TestCase):
         d, mu, sig = 0.03, 0.0005, 0.02
         self.assertGreater(touch_prob_drift(d, mu, sig, 48.0),
                            touch_prob_drift(d, mu, sig, 6.0))
+
+
+class TestRegime(unittest.TestCase):
+    def _drive(self, n, idx_ret=0.0, div_drift_z=0.0):
+        st = None
+        for _ in range(n):
+            st = regime_update(st, 1.0, idx_ret, div_drift_z, 0.02, "2026-06-01T00:00:00+00:00")
+        return st
+
+    def test_flips_to_bull_after_exactly_six_polls(self):
+        # a sustained up-signal (here via divine drift) flips state only once it
+        # has held for six consecutive polls — hysteresis, not a hair trigger
+        self.assertEqual(self._drive(5, div_drift_z=2.0)["state"], "CHOP")
+        self.assertEqual(self._drive(6, div_drift_z=2.0)["state"], "BULL")
+
+    def test_flat_market_stays_chop(self):
+        self.assertEqual(self._drive(30)["state"], "CHOP")
+
+    def test_single_spike_never_flips_state(self):
+        st = regime_update(None, 1.0, 0.0, 3.0, 0.02, "t")   # one big up-poll
+        for _ in range(20):                                   # then quiet
+            st = regime_update(st, 1.0, 0.0, 0.0, 0.02, "t")
+        self.assertEqual(st["state"], "CHOP")                # the spike never took hold
+
+    def test_mirrored_bear(self):
+        self.assertEqual(self._drive(6, div_drift_z=-2.0)["state"], "BEAR")
 
 
 class TestFees(unittest.TestCase):

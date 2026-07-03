@@ -13,7 +13,7 @@ from pathlib import Path
 from . import MODEL_V, store
 from .models import (best_ratio, daily_anchor, fee_pct, fit_ou, kf_drift_z,
                      kf_level, kf_new, kf_sd, kf_sig_h, kf_step, median,
-                     weighted_median)
+                     regime_update, weighted_median)
 from .score import (beta_mean, beta_sd, calib_apply, calib_default, decay_calib,
                     feature_reliability, fill_by_hour, graduation,
                     model_reliability, model_touch_reliability, summarize,
@@ -189,6 +189,43 @@ def _load_calib_versioned(c, adv):
     store.kv_set(c, "calib_model", MODEL_V)
     store.kv_set_json(c, "gates", {})
     return calib, {}
+
+
+def _regime_step(c, rows, ts, dt_h, disp, adv):
+    """Maintain a rolling volume-weighted index (top-20, weights refreshed weekly)
+    and update the market regime from its return. The index is CHAIN-LINKED: on a
+    weight refresh the per-member reference levels reset to the current levels, so
+    the switch books no spurious return and levels are never compared across
+    weight sets. Returns the regime state dict. Diagnostic; nothing gates on it."""
+    ridx = store.kv_json(c, "regime_idx", {})
+    cand = {nm: r for nm, r in rows.items() if nm not in MAJORS and r["vol_div"] > 0}
+    stale = (not ridx.get("weights") or hours_between(
+        ridx.get("weights_ts", "1970-01-01T00:00:00+00:00"), ts) >= 168.0)
+    if stale and cand:
+        members = sorted(cand.values(), key=lambda r: -r["vol_div"])[:20]
+        tot = sum(m["vol_div"] for m in members) or 1.0
+        ridx["weights"] = {m["item"]: m["vol_div"] / tot for m in members}
+        ridx["weights_ts"] = ts
+        ridx["last_lvl"] = {m["item"]: m["lvl"] for m in members}   # chain-link anchor
+        ridx.setdefault("level", 1.0)
+    w, last = ridx.get("weights") or {}, ridx.get("last_lvl") or {}
+    num = wsum = 0.0
+    for nm, wt in w.items():
+        r = rows.get(nm)
+        if r is None or nm not in last:
+            continue
+        num += wt * (r["lvl"] - last[nm])
+        wsum += wt
+        last[nm] = r["lvl"]
+    idx_ret = num / wsum if wsum > 0 else 0.0
+    ridx["last_lvl"] = last
+    ridx["level"] = ridx.get("level", 1.0) * math.exp(idx_ret)
+    div = rows.get("Divine Orb")
+    reg = regime_update(ridx.get("regime"), dt_h, idx_ret,
+                        div["drift_z"] if div else 0.0, disp, ts)
+    ridx["regime"] = reg
+    store.kv_set_json(c, "regime_idx", ridx)
+    return reg
 
 
 # -------------------------------------------------------------- shadow -----
@@ -472,6 +509,7 @@ def _poll(cfg, io, db_path, store_snap):
         r["fam_z"] = fam_dev.get(r["family"], 0.0) / sd_typ
     market_z = mkt_dev / sd_typ
     circuit = abs(market_z) >= adv["circuit_z"]
+    regime = _regime_step(c, rows, ts, dt, sd_typ, adv)
 
     # ---- calibration + proposals ----------------------------------------
     calib, gates = _load_calib_versioned(c, adv)
@@ -666,7 +704,7 @@ def _poll(cfg, io, db_path, store_snap):
             "gap_pct": p.get("gap_pct"), "model": MODEL_V,
             "feat": {**p.get("det", {}),
                      "vol_div": round(p.get("vol_div") or 0),
-                     "hour": int(ts[11:13])}}, ts)
+                     "hour": int(ts[11:13]), "regime": regime["state"]}}, ts)
         shadow["orders"].append({"pid": pid, "card_id": cs["id"], "sig": p["sig"],
                                  "item": p["item"], "px": p["entry_px"],
                                  "target": p.get("target_px"), "qty": cs["size"]["qty"],
@@ -755,6 +793,8 @@ def _poll(cfg, io, db_path, store_snap):
         store.kv_set_json(c, "grad_points", grad_pts)
     snap.update({
         "errors": errors[:6], "circuit": circuit, "market_z": round(market_z, 2),
+        "regime": {"state": regime["state"], "since": regime.get("since_ts"),
+                   "slope_pct_day": round(regime["slope_ewma"] * 100, 2)},
         "trust": trust_line(graded30, mode, adv["calib_half_life_d"]),
         "grad": graduation(grad_pts, adv, mode),
         "cards": cards_ui, "status": status,
