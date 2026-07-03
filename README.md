@@ -114,6 +114,15 @@ first run — they were measured under the old definition; your trade ledger, pa
 the full prediction history are preserved. DIP re-seeds from your last `--bootstrap` automatically;
 re-run `python quant.py --bootstrap` if you want to refresh it.)
 
+**Upgrading to v1.4.x / model `m3`:** fill forecasts are now **evidence-weighted** (the shown
+`p_fill` follows the measured fill rate as it accrues, not an optimistic touch model) and the whole
+calibration is **recency-weighted** (posteriors relax toward their priors on a 14-day half-life, so
+the current regime outweighs stale early-league evidence). Because the fill event's definition and
+the calibration dynamics changed, the per-signal calibration and auto-gates **reset once** again on
+first run; your trade ledger, paper track record, and full prediction history are preserved, and DIP
+re-seeds from your last `--bootstrap` (re-run it to refresh). The Kalman volatility estimate and the
+OU reversion-speed fit were also corrected in this line.
+
 Crucially, the shadow book keeps forecasting the **top opportunities every poll regardless of
 whether you have a free slot or capital to act** (up to `shadow_cap`), so the self-evaluation never
 stalls just because your positions are full — the app can always answer "is it working?"
