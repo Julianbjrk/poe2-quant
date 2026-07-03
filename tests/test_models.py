@@ -101,6 +101,29 @@ class TestOU(unittest.TestCase):
         self.assertAlmostEqual(ou["b"], b, delta=0.06)
         self.assertAlmostEqual(ou["theta"], theta, delta=0.01)
 
+    def test_small_sample_bias_correction(self):
+        # OLS AR(1) is biased low in small samples (Kendall ≈ (1+3b)/n): for a
+        # true b of 0.97 the uncorrected estimate centers near 0.93, which would
+        # shorten the DIP horizon H = 3/κ for no real reason. The correction
+        # recovers b to within ±0.015 of truth (averaged over reps to beat
+        # sampling noise; the returned b carries the mild prior shrinkage).
+        from datetime import datetime, timedelta, timezone
+        b_true, sig, theta = 0.97, 0.01, math.log(100)
+        t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        bs = []
+        for rep in range(200):
+            random.seed(rep)
+            x, closes = theta, []
+            for h in range(120):
+                x = theta + b_true * (x - theta) + random.gauss(0, sig)
+                closes.append(((t0 + timedelta(hours=h)).isoformat(timespec="seconds"),
+                               math.exp(x)))
+            bs.append(fit_ou(closes)["b"])
+        mean_b = sum(bs) / len(bs)
+        self.assertAlmostEqual(mean_b, b_true, delta=0.015,
+                               msg=f"fitted b={mean_b:.4f}; uncorrected OLS centers ~0.93")
+        self.assertGreater(mean_b, 0.95)     # clearly above the uncorrected baseline
+
     def test_ignores_time_gaps(self):
         # bars spaced 3h apart (an offline gap) must NOT be read as 1h reversion
         # steps; with no contiguous pairs, b falls back to the prior.

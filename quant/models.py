@@ -136,6 +136,10 @@ def fit_ou(closes):
         vx = sum((p[0] - mx) ** 2 for p in pairs) / n
         cxy = sum((p[0] - mx) * (p[1] - my) for p in pairs) / n
         b_hat = clamp(cxy / vx if vx > 1e-12 else B_PRIOR, 0.5, 0.999)
+        # Kendall small-sample correction: OLS AR(1) is biased low by ≈(1+3b)/n,
+        # which would shorten H = 3/κ (part of the graded event) for no real
+        # reason. Corrects the raw estimate before shrinkage toward the prior.
+        b_hat = clamp(b_hat + (1.0 + 3.0 * b_hat) / n, 0.5, 0.999)
         b = (n * b_hat + N_PRIOR * B_PRIOR) / (n + N_PRIOR)
     else:
         b = B_PRIOR               # too few contiguous pairs to estimate reversion

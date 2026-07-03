@@ -56,15 +56,17 @@ def make_cfg():
 
 
 def dip_script():
-    """An item that has DEMONSTRATED reversion (three dip-and-recover cycles),
-    then dips sharply and STABILISES — a real dip, not a falling knife. The
-    stabilisation tail matters: the drift estimate must decay back above the
-    knife-guard before DIP will fire (correctly, post the rv-estimator fix)."""
-    calm = lambda n: [100.0 + (0.3 if i % 2 else -0.3) for i in range(n)]
-    cycle = lambda lo: [lo, lo + 1.5, lo + 3.0, 100.3]
-    return (calm(8) + cycle(96.0) + calm(4) + cycle(95.5) + calm(4)
-            + cycle(96.5) + calm(4) + [95.0, 91.5, 89.0, 88.3]
-            + [88.5, 88.4, 88.5, 88.5, 88.4, 88.5])
+    """A genuinely MEAN-REVERTING item — repeated over/undershoots that snap
+    back to ~100 — then a decisive dip that STABILISES near the bottom. Both
+    properties matter: visible reversion keeps the fitted AR(1) b realistic (a
+    flat or one-directional stretch inflates it toward a random walk, which the
+    small-sample bias correction then pushes further, over-shrinking the target
+    under the horizon cap); and the stabilisation lets the drift estimate clear
+    the falling-knife guard so DIP fires on a real dip, not a knife."""
+    revert = [100.0, 97.0, 101.5, 98.5, 101.0, 99.0, 100.5,
+              96.0, 99.5, 101.0, 98.0, 100.5, 99.5, 100.2]
+    settle = [88.0, 88.3, 87.8]
+    return revert * 3 + [96.0, 92.0, 89.0, 88.0] + settle * 2
 
 
 class TestEngine(unittest.TestCase):
