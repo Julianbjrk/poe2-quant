@@ -2,10 +2,10 @@ import math
 import unittest
 
 from quant.config import ADVANCED_DEFAULTS as ADV
-from quant.score import (brier, calib_apply, calib_default, crps_gauss,
-                         feature_reliability, fill_by_hour, graduation,
-                         model_reliability, normal_update,
-                         summarize, update_gates)
+from quant.score import (beta_mean, brier, calib_apply, calib_default,
+                         crps_gauss, decay_calib, feature_reliability,
+                         fill_by_hour, graduation, model_reliability,
+                         normal_update, summarize, update_gates)
 
 
 class TestScores(unittest.TestCase):
@@ -57,6 +57,43 @@ class TestCalibration(unittest.TestCase):
             calib_apply(cal, "DIP", pred,
                         {"filled": 1, "hit": 0, "realized_pct": -2.0, "mfe_pct": 9.0})
         self.assertGreater(cal["DIP"]["rev"][0], 0.75)   # MFE 9/10 pulls it up
+
+
+class TestDecay(unittest.TestCase):
+    def test_one_half_life_moves_halfway_to_prior(self):
+        cal = calib_default(ADV)                          # DIP hit prior [6,4]
+        cal["DIP"]["hit"] = [20.0, 4.0]
+        decay_calib(cal, ADV, ADV["calib_half_life_d"])   # exactly one half-life
+        self.assertAlmostEqual(cal["DIP"]["hit"][0], 13.0, places=6)  # halfway 20→6
+        self.assertAlmostEqual(cal["DIP"]["hit"][1], 4.0, places=6)   # already at prior
+
+    def test_repeated_decay_converges_to_prior_never_crosses(self):
+        cal = calib_default(ADV)
+        cal["DIP"]["hit"] = [30.0, 2.0]
+        prev = cal["DIP"]["hit"][0]
+        for _ in range(60):
+            decay_calib(cal, ADV, 7.0)
+            self.assertGreaterEqual(cal["DIP"]["hit"][0], 6.0 - 1e-9)  # never below prior a
+            self.assertLessEqual(cal["DIP"]["hit"][0], prev + 1e-9)    # monotone toward prior
+            prev = cal["DIP"]["hit"][0]
+        self.assertAlmostEqual(cal["DIP"]["hit"][0], 6.0, places=2)    # converges to prior
+        self.assertAlmostEqual(cal["DIP"]["hit"][1], 4.0, places=2)
+
+    def test_fresh_grade_moves_faster_after_decay(self):
+        # heavy decay shrinks the effective sample size, so one new hit grade moves
+        # the mean MORE than it would against the un-decayed posterior
+        out = {"filled": 1, "hit": 1}
+        undecayed = calib_default(ADV)
+        undecayed["DIP"]["hit"] = [30.0, 20.0]            # mean 0.6, weight 50
+        decayed = calib_default(ADV)
+        decayed["DIP"]["hit"] = [30.0, 20.0]
+        decay_calib(decayed, ADV, 2 * ADV["calib_half_life_d"])   # two half-lives → weight ~12.5
+        m_u0, m_d0 = beta_mean(undecayed["DIP"]["hit"]), beta_mean(decayed["DIP"]["hit"])
+        self.assertAlmostEqual(m_u0, m_d0, places=6)     # same mean, only the weight shrank
+        calib_apply(undecayed, "DIP", {}, out)
+        calib_apply(decayed, "DIP", {}, out)
+        self.assertGreater(beta_mean(decayed["DIP"]["hit"]) - m_d0,
+                           beta_mean(undecayed["DIP"]["hit"]) - m_u0)
 
 
 class TestWelford(unittest.TestCase):

@@ -72,6 +72,7 @@ ADVANCED_DEFAULTS = {
     "shadow_cap": 24,               # concurrent shadow-book forecasts (independent of your slots)
     "gate_n_min": 20,               # closed trades before the edge gate can trip
     "gate_fill_min": 8,             # fills before the hit-calibration gate can trip
+    "calib_half_life_d": 14,        # posteriors relax toward prior on this half-life (regime tracking)
     "circuit_z": 2.5,               # market-wide move (in its own sd) that halts entries
     "grad_days_min": 14,            # graduation: days of paper curve required…
     "grad_t_min": 1.64,             # …and t-stat of daily alpha vs worst benchmark

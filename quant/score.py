@@ -96,6 +96,38 @@ def calib_apply(calib, sig, pred, out):
             normal_update(cal["spread"], clamp(out["realized_pct"], -5.0, 15.0))
 
 
+def decay_calib(calib, adv, days):
+    """Exponentially relax every posterior toward its PRIOR with a half-life of
+    calib_half_life_d days. Posteriors otherwise accumulate lifetime counts, so
+    early-league evidence outweighs the current regime forever — but div/ex
+    tripled inside 17 days, and the world a hit rate was measured in evaporates.
+    Each posterior asymptotes at its prior and never crosses it (λ ∈ [0,1)).
+    Mutates calib in place. Composes correctly across calls: decaying by d1 then
+    d2 equals one decay by d1+d2. The prediction ledger, gates and grad_points
+    are NOT touched — only the live posteriors."""
+    if days <= 0:
+        return calib
+    hl = max(adv.get("calib_half_life_d", 14), 1e-6)
+    lam = 0.5 ** (days / hl)
+    prior = calib_default(adv)
+    for sig in SIGS:
+        cal, pr = calib.get(sig), prior.get(sig)
+        if not cal or not pr:
+            continue
+        for key in ("hit", "fill"):
+            if key in cal and key in pr:
+                cal[key][0] = pr[key][0] + (cal[key][0] - pr[key][0]) * lam
+                cal[key][1] = pr[key][1] + (cal[key][1] - pr[key][1]) * lam
+        for key in ("rev", "spread"):     # Normal states [mean, var, n, M2]
+            if key in cal and key in pr:
+                st, ps = cal[key], pr[key]
+                st[0] = ps[0] + (st[0] - ps[0]) * lam   # mean → prior mean
+                st[2] = ps[2] + (st[2] - ps[2]) * lam   # pseudo-count → seed n0
+                st[3] = ps[3] + (st[3] - ps[3]) * lam   # M2 → seed M2
+                st[1] = st[3] / max(st[2] - 1.0, 1.0)   # keep var consistent
+    return calib
+
+
 # ------------------------------------------------------------ summaries ----
 def summarize(graded):
     """graded: rows from store.predictions_graded. -> per-sig stats + buckets."""
@@ -322,7 +354,8 @@ def update_gates(gates, summary, adv):
 
 
 # ----------------------------------------------------- trust + graduation --
-def trust_line(graded30, mode):
+def trust_line(graded30, mode, half_life_d=None):
+    recency = f" · recency-weighted (½-life {int(half_life_d)}d)" if half_life_d else ""
     closed = [g for g in graded30 if g["out"].get("realized_pct") is not None]
     if len(closed) < 5:
         n = len(graded30)
@@ -332,7 +365,7 @@ def trust_line(graded30, mode):
     hits = [g for g in closed if g["out"].get("hit")]
     return (f"Last 30d: {len(closed)} closed calls (incl. untaken, tracked anyway) · "
             f"{len(hits)} hit target · avg {fmt_pct(mean_e, signed=True)} per trade after est. fees"
-            + (" · paper mode" if mode == "paper" else ""))
+            + (" · paper mode" if mode == "paper" else "") + recency)
 
 
 def graduation(grad_points, adv, mode):

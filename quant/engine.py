@@ -14,7 +14,7 @@ from . import MODEL_V, store
 from .models import (best_ratio, daily_anchor, fee_pct, fit_ou, kf_drift_z,
                      kf_level, kf_new, kf_sd, kf_sig_h, kf_step, median,
                      weighted_median)
-from .score import (beta_mean, beta_sd, calib_apply, calib_default,
+from .score import (beta_mean, beta_sd, calib_apply, calib_default, decay_calib,
                     feature_reliability, fill_by_hour, graduation,
                     model_reliability, model_touch_reliability, summarize,
                     today, trust_line, update_gates)
@@ -475,6 +475,15 @@ def _poll(cfg, io, db_path, store_snap):
 
     # ---- calibration + proposals ----------------------------------------
     calib, gates = _load_calib_versioned(c, adv)
+    # recency-weight the posteriors before this poll's grades land: relax toward
+    # prior by the time elapsed since the last decay (hourly cadence, like the OU
+    # refit). Composes exactly, so hourly steps == one continuous decay.
+    last_decay = store.kv_get(c, "calib_decay_ts")
+    if last_decay is None:
+        store.kv_set(c, "calib_decay_ts", ts)
+    elif hours_between(last_decay, ts) >= 1.0:
+        decay_calib(calib, adv, hours_between(last_decay, ts) / 24.0)
+        store.kv_set(c, "calib_decay_ts", ts)
     vol_floor = adv["min_volume_div_day"] * preset["vol_floor_x"]
     cand_rows = {nm: r for nm, r in rows.items() if nm not in MAJORS}
     props = propose_all(cand_rows, routes, adv["recipes"], calib, adv, vol_floor)
@@ -746,7 +755,8 @@ def _poll(cfg, io, db_path, store_snap):
         store.kv_set_json(c, "grad_points", grad_pts)
     snap.update({
         "errors": errors[:6], "circuit": circuit, "market_z": round(market_z, 2),
-        "trust": trust_line(graded30, mode), "grad": graduation(grad_pts, adv, mode),
+        "trust": trust_line(graded30, mode, adv["calib_half_life_d"]),
+        "grad": graduation(grad_pts, adv, mode),
         "cards": cards_ui, "status": status,
         "no_trade": None if any(c["act"] not in ("HOLD",) for c in cards_ui) else {
             "checked": len(rows), "miss": miss,

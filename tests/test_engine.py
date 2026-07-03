@@ -187,7 +187,9 @@ class TestEngine(unittest.TestCase):
         self.assertGreater(dip_hits[0]["out"]["realized_pct"], 0)
         calib = store.kv_json(c, "calib")
         base = calib_default(self.cfg["adv"])
-        self.assertGreaterEqual(calib["DIP"]["hit"][0], base["DIP"]["hit"][0] + 1)
+        # the hit grade added ~one observation; recency decay trims a hair each
+        # subsequent hourly poll, so allow for it rather than demanding exactly +1
+        self.assertGreaterEqual(calib["DIP"]["hit"][0], base["DIP"]["hit"][0] + 0.9)
         c.close()
         sells = [c_ for c_ in snap["cards"] if c_["act"] == "SELL"]
         self.assertEqual(len(sells), 1)
