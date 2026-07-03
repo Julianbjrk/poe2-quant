@@ -535,9 +535,16 @@ def _poll(cfg, io, db_path, store_snap):
     # shadow book is loaded here so it can keep forecasting the top opportunities
     # regardless of whether the user has a free slot to act on them.
     shadow = store.kv_json(c, "shadow", {"orders": [], "pos": []})
-    shadow_tracked = ({o["item"] for o in shadow["orders"]} | {p["item"] for p in shadow["pos"]}
-                      | {cs["prop"]["item"] for cs in kept})
+    # track by (sig, item) so DIP and MAKE on the same item can both be graded
+    shadow_tracked = ({(o["sig"], o["item"]) for o in shadow["orders"]}
+                      | {(p["sig"], p["item"]) for p in shadow["pos"]}
+                      | {(cs["prop"]["sig"], cs["prop"]["item"]) for cs in kept})
     shadow_room = max(0, adv["shadow_cap"] - len(shadow["orders"]) - len(shadow["pos"]))
+    # per-signal quota so one loud signal can't monopolize the learning budget
+    shadow_per_sig = {}
+    for e in shadow["orders"] + shadow["pos"]:
+        shadow_per_sig[e["sig"]] = shadow_per_sig.get(e["sig"], 0) + 1
+    sig_quota = adv["shadow_cap"] // 5 + 1
     new_cards, shadow_new = [], []
     entries_off = circuit or not rate
     slots = max(0, min(adv["max_cards"], preset["max_positions"] - len(pos_now) - n_orders)
@@ -559,15 +566,19 @@ def _poll(cfg, io, db_path, store_snap):
             fams_used.add(p["family"])
             slots -= 1
             shadow_new.append(cs)
-            shadow_tracked.add(p["item"])
+            shadow_tracked.add((p["sig"], p["item"]))
+            shadow_per_sig[p["sig"]] = shadow_per_sig.get(p["sig"], 0) + 1
             shadow_room -= 1
         else:
             # forecast it in the shadow book anyway (slots full, capital tied up,
-            # family used, or gated) so self-grading never stalls on user state.
-            if p["item"] not in shadow_tracked and shadow_room > 0:
+            # family used, or gated) so self-grading never stalls on user state —
+            # bounded by a per-signal quota so no one signal starves the others.
+            if ((p["sig"], p["item"]) not in shadow_tracked and shadow_room > 0
+                    and shadow_per_sig.get(p["sig"], 0) < sig_quota):
                 shadow_new.append({"id": f"{p['sig']}:{p['item']}:{ts}", "born": ts,
                                    "prop": p, "size": sized or {"qty": 1}, "shadow_only": True})
-                shadow_tracked.add(p["item"])
+                shadow_tracked.add((p["sig"], p["item"]))
+                shadow_per_sig[p["sig"]] = shadow_per_sig.get(p["sig"], 0) + 1
                 shadow_room -= 1
             if miss is None and not gated and why_not:
                 miss = {"item": p["item"], "sig": p["sig"], "reason": why_not}

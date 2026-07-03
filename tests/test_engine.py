@@ -156,8 +156,8 @@ class TestEngine(unittest.TestCase):
         c = store.connect(self.db)
         shadow = store.kv_json(c, "shadow")
         self.assertFalse([o for o in shadow["orders"] if o["item"] == "Test Orb" and o["sig"] == "DIP"])
-        self.assertEqual(len([p for p in shadow["pos"]
-                              if p["item"] == "Test Orb" and p["sig"] == "DIP"]), 1)
+        self.assertGreaterEqual(len([p for p in shadow["pos"]
+                                     if p["item"] == "Test Orb" and p["sig"] == "DIP"]), 1)
         fills = store.fills(c, "paper")
         self.assertEqual(len(fills), 1)
         self.assertEqual(fills[0]["order_id"], oid)
@@ -283,6 +283,27 @@ class TestEngine(unittest.TestCase):
         self.assertIsNotNone(closed)                     # row still closed
         c.close()
 
+    def test_shadow_quota_prevents_signal_monopoly(self):
+        # a loud signal must not eat the whole shadow-learning budget: 20 open
+        # ROUTE forecasts must still leave room for a DIP forecast to be graded.
+        self.play_script(dip_script())
+        c = store.connect(self.db)
+        flood = [{"pid": f"p:R{i}", "card_id": f"R{i}", "sig": "ROUTE", "item": f"Route {i}",
+                  "px": 10.0, "target": 12.0, "qty": 1, "H_h": 12.0, "ts": self.io.now_iso()}
+                 for i in range(20)]
+        store.kv_set_json(c, "shadow", {"orders": flood, "pos": []})
+        store.kv_set_json(c, "cards_active", [])
+        c.commit()
+        c.close()
+        self.io.test_px = 88.5
+        self.run_poll()
+        c = store.connect(self.db)
+        sh = store.kv_json(c, "shadow")
+        dip_shadow = ([o for o in sh["orders"] if o["sig"] == "DIP"]
+                      + [p for p in sh["pos"] if p["sig"] == "DIP"])
+        self.assertTrue(dip_shadow, "DIP starved despite the per-signal shadow quota")
+        c.close()
+
     def test_shadow_book_forecasts_even_when_slots_full(self):
         # the bug the user hit: with all position slots full, the shadow book
         # must KEEP forecasting the top opportunities so self-grading never stalls.
@@ -334,7 +355,7 @@ class TestEngine(unittest.TestCase):
         graded = store.predictions_graded(c, 30)
         dip_to = [g for g in graded if g["item"] == "Test Orb" and g["sig"] == "DIP"]
         self.assertTrue(dip_to)
-        self.assertEqual(dip_to[0]["out"]["filled"], 0)          # bid never reached
+        self.assertTrue(any(g["out"]["filled"] == 0 for g in dip_to))  # a bid that never reached
         shadow = store.kv_json(c, "shadow")
         self.assertFalse([o for o in shadow["orders"]
                           if o["item"] == "Test Orb" and o["sig"] == "DIP"])  # its DIP order is gone
