@@ -160,6 +160,34 @@ def model_reliability(graded):
     return out
 
 
+def model_touch_reliability(graded):
+    """Cousin of model_reliability for the PRICE-ONLY event: did the item reach
+    target within H, regardless of whether our entry ever filled? Buckets
+    p_model against realized touch over ALL forecasts (filled use hit; unfilled
+    use the watched touch) — so it finally sees the ~4-of-7 DIPs that expired
+    unfilled and taught the hit model nothing. SELECTION-BIAS caveat: touch is
+    unconditional on fill and therefore EASIER than a filled hit, so these rates
+    read high — a diagnostic of price forecasting, never a sizing input. Pure."""
+    out = {}
+    for sig in SIGS:
+        rows = [(g["pred"].get("p_model"),
+                 1 if g["out"].get("touch", g["out"].get("hit")) else 0)
+                for g in graded if g["sig"] == sig
+                and g["pred"].get("p_model") is not None
+                and (g["out"].get("touch") is not None or g["out"].get("filled"))]
+        if not rows:
+            continue
+        buckets = []
+        for lo, hi in ((0.0, 0.4), (0.4, 0.6), (0.6, 0.8), (0.8, 1.01)):
+            sel = [(p, y) for p, y in rows if lo <= p < hi]
+            if sel:
+                buckets.append({"lo": lo, "hi": min(hi, 1.0), "n": len(sel),
+                                "p_mean": round(sum(p for p, _ in sel) / len(sel), 2),
+                                "freq": round(sum(y for _, y in sel) / len(sel), 2)})
+        out[sig] = {"n": len(rows), "buckets": buckets}
+    return out
+
+
 def _feat_buckets(pairs, edges, labels):
     """pairs: [(x, hit)] for one raw feature; `edges` gives len(labels)+1 cut
     points defining consecutive bins [edges[i], edges[i+1]). -> bucket dicts,

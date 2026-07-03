@@ -5,7 +5,7 @@ to the precision the models actually have — the UI is not allowed to imply
 more. Probabilities render as plain odds ("7 in 10"), never as decimals.
 """
 import math
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 
 def now_iso():
@@ -14,6 +14,10 @@ def now_iso():
 
 def parse_iso(ts):
     return datetime.fromisoformat(ts)
+
+
+def add_hours(ts, h):
+    return (parse_iso(ts) + timedelta(hours=h)).isoformat(timespec="seconds")
 
 
 def hours_between(ts_old, ts_new):

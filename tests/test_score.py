@@ -36,6 +36,18 @@ class TestCalibration(unittest.TestCase):
         calib_apply(cal, "DIP", {}, {"filled": 0})
         self.assertEqual(cal["DIP"]["hit"], hit_before)
 
+    def test_touch_and_mfe_on_unfilled_row_never_move_hit(self):
+        # Task 4: an unfilled forecast is graded with a fill-independent price
+        # outcome (touch/mfe). That is a DIAGNOSTIC — it moves the fill posterior
+        # (a miss) but must never move the hit posterior it isn't conditioned on.
+        cal = calib_default(ADV)
+        hit_before = list(cal["DIP"]["hit"])
+        fill_before = list(cal["DIP"]["fill"])
+        calib_apply(cal, "DIP", {"gap_pct": 10.0},
+                    {"filled": 0, "touch": 1, "mfe_pct": 9.0})
+        self.assertEqual(cal["DIP"]["hit"], hit_before)      # touch/mfe never size
+        self.assertNotEqual(cal["DIP"]["fill"], fill_before)  # the fill miss IS learned
+
     def test_rev_prefers_mfe_over_realized(self):
         # a non-hit that nonetheless reverted a lot (high MFE) must still lift the
         # reversion fraction — the bug the shorter horizon would otherwise cause.

@@ -251,6 +251,48 @@ class TestEngine(unittest.TestCase):
         self.assertAlmostEqual(o["mfe_pct"], 4.0, delta=0.5)        # 104/100-1 = +4%
         c.close()
 
+    def _run_unfilled_watch(self, prices):
+        # helper: an entry order at px=90 that ninja (always >90) never fills;
+        # after fill_window it enters the price-watch and resolves at H_h=12.
+        import json
+        import quant.engine as eng
+        from quant.engine import shadow_process
+        c = store.connect(self.db)
+        cache = {}
+        t0 = datetime(2026, 6, 12, tzinfo=timezone.utc)
+        iso = lambda h: (t0 + timedelta(hours=h)).isoformat(timespec="seconds")
+        for h, px in prices:
+            store.insert_ticks(c, iso(h), [("Yaw Orb", "ninja", px, 100)], cache)
+        store.predict_write(c, "p:y", "y", "DIP", "Yaw Orb",
+                            {"p_hit": 0.6, "p_model": 0.6, "H_h": 12.0, "gap_pct": 10.0,
+                             "entry": 90.0, "target": 110.0, "model": eng.MODEL_V})
+        c.commit()
+        shadow = {"orders": [{"pid": "p:y", "sig": "DIP", "item": "Yaw Orb", "px": 90.0,
+                              "target": 110.0, "qty": 1, "H_h": 12.0, "ts": iso(0)}], "pos": []}
+        calib = calib_default(self.cfg["adv"])
+        hit_before = list(calib["DIP"]["hit"])
+        shadow_process(c, shadow, iso(7), self.cfg["adv"], calib)    # >fill_window → to watch
+        self.assertEqual(shadow["orders"], [])
+        self.assertEqual(len(shadow["watch"]), 1)
+        self.assertIsNone(c.execute("SELECT outcome FROM predictions WHERE id='p:y'").fetchone()[0])
+        shadow_process(c, shadow, iso(13), self.cfg["adv"], calib)   # ≥H_h → resolve
+        self.assertEqual(shadow["watch"], [])
+        out = json.loads(c.execute("SELECT outcome FROM predictions WHERE id='p:y'").fetchone()[0])
+        c.close()
+        self.assertEqual(out["filled"], 0)
+        self.assertEqual(calib["DIP"]["hit"], hit_before)           # touch never moves hit
+        return out
+
+    def test_unfilled_watch_grades_touch_when_price_reaches_target(self):
+        out = self._run_unfilled_watch([(0, 100.), (2, 105.), (4, 111.), (6, 108.),
+                                        (8, 106.), (10, 104.), (12, 103.)])
+        self.assertEqual(out["touch"], 1)                           # 111 ≥ 110 within H_h
+
+    def test_unfilled_watch_touch_zero_when_target_never_reached(self):
+        out = self._run_unfilled_watch([(0, 100.), (2, 105.), (4, 108.), (6, 107.),
+                                        (8, 106.), (10, 104.), (12, 103.)])
+        self.assertEqual(out["touch"], 0)                           # never crossed 110
+
     def test_model_bump_resets_and_guards_calibration(self):
         # the migration: a forecast-math change (MODEL_V) must archive + reset the
         # posteriors and gates, re-seed DIP from the last bootstrap, and NOT let
@@ -348,22 +390,39 @@ class TestEngine(unittest.TestCase):
         self.assertFalse([c_ for c_ in snap["cards"] if c_["act"] in ("DIP", "MAKE", "ROUTE", "PARITY")])
         self.assertIn("slots", snap["status"]["entries_reason"])
 
-    def test_unfilled_entry_expires_and_grades_fill_forecast(self):
+    def test_unfilled_entry_expires_to_watch_then_grades_at_horizon(self):
         snap = self.play_script(dip_script())
         self.assertTrue([c for c in snap["cards"] if c["act"] == "DIP"])
-        # price runs away instead of filling; past the fill window the order expires
+        # price runs away instead of filling; past the fill window the order leaves
+        # the book — but under Task 4 it is PRICE-WATCHED to H_h, not graded yet
         self.io.test_px = 99.0
         for _ in range(8):
             self.run_poll()
             self.io.step(1)
         c = store.connect(self.db)
-        graded = store.predictions_graded(c, 30)
-        dip_to = [g for g in graded if g["item"] == "Test Orb" and g["sig"] == "DIP"]
-        self.assertTrue(dip_to)
-        self.assertTrue(any(g["out"]["filled"] == 0 for g in dip_to))  # a bid that never reached
         shadow = store.kv_json(c, "shadow")
         self.assertFalse([o for o in shadow["orders"]
-                          if o["item"] == "Test Orb" and o["sig"] == "DIP"])  # its DIP order is gone
+                          if o["item"] == "Test Orb" and o["sig"] == "DIP"])  # left the book
+        watched = [w for w in shadow.get("watch", [])
+                   if w["item"] == "Test Orb" and w["sig"] == "DIP"]
+        self.assertTrue(watched)                                             # now price-watched
+        graded = store.predictions_graded(c, 30)
+        self.assertFalse([g for g in graded if g["item"] == "Test Orb"
+                          and g["sig"] == "DIP" and g["out"].get("filled") == 0])  # not graded yet
+        c.close()
+        # jump past the forecast horizon; the watch resolves into a graded fill-miss
+        # that also carries the fill-independent price outcome (touch)
+        self.io.step(max(w["H_h"] for w in watched) + 1)
+        self.run_poll()
+        c = store.connect(self.db)
+        graded = store.predictions_graded(c, 30)
+        dip_miss = [g for g in graded if g["item"] == "Test Orb" and g["sig"] == "DIP"
+                    and g["out"].get("filled") == 0]
+        self.assertTrue(dip_miss)                                            # graded at H_h
+        self.assertIn("touch", dip_miss[0]["out"])                           # with the diagnostic
+        shadow = store.kv_json(c, "shadow")
+        self.assertFalse([w for w in shadow.get("watch", [])
+                          if w["item"] == "Test Orb"])                       # watch cleared
         c.close()
 
 

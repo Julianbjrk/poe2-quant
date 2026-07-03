@@ -16,9 +16,10 @@ from .models import (best_ratio, daily_anchor, fee_pct, fit_ou, kf_drift_z,
                      weighted_median)
 from .score import (beta_mean, beta_sd, calib_apply, calib_default,
                     feature_reliability, fill_by_hour, graduation,
-                    model_reliability, summarize, today, trust_line, update_gates)
-from .util import (best_match, clamp, fmt_dur_h, fmt_ex, fmt_money, fmt_p,
-                   fmt_pct, fmt_signed_ex, hours_between, now_iso)
+                    model_reliability, model_touch_reliability, summarize,
+                    today, trust_line, update_gates)
+from .util import (add_hours, best_match, clamp, fmt_dur_h, fmt_ex, fmt_money,
+                   fmt_p, fmt_pct, fmt_signed_ex, hours_between, now_iso)
 from .signals import propose_all
 
 _poll_lock = threading.Lock()
@@ -195,9 +196,12 @@ def shadow_process(c, shadow, ts, adv, calib):
     """Fill resting shadow orders on trade-through; close positions on target,
     abandon, or timeout; grade the prediction the moment the truth is known."""
     keep_o, opened = [], []
-    items = {o["item"] for o in shadow["orders"]} | {p["item"] for p in shadow["pos"]}
+    watch = shadow.setdefault("watch", [])   # unfilled forecasts, price-watched to H_h
+    items = ({o["item"] for o in shadow["orders"]} | {p["item"] for p in shadow["pos"]}
+             | {w["item"] for w in watch})
     since = min([o["ts"] for o in shadow["orders"]]
-                + [p["entry_ts"] for p in shadow["pos"]], default=ts)
+                + [p["entry_ts"] for p in shadow["pos"]]
+                + [w["ts"] for w in watch], default=ts)
     series = store.ticks_since(c, since, list(items)) if items else {}
 
     def crossed(item, since, level, side):
@@ -222,7 +226,11 @@ def shadow_process(c, shadow, ts, adv, calib):
         if t_fill:
             opened.append({**o, "entry_ts": t_fill})
         elif hours_between(o["ts"], ts) > adv["fill_window_h"]:
-            grade(o["pid"], o["sig"], {"filled": 0})
+            # expired unfilled: don't grade yet — watch the PRICE to H_h so we
+            # still learn whether it would have reached target (a fill-independent
+            # diagnostic). The fill miss is graded once, when the watch resolves.
+            hz = min(o.get("H_h", adv["max_hold_h"]), adv["max_hold_h"])
+            watch.append({**o, "watch_until": add_hours(o["ts"], hz)})
         else:
             keep_o.append(o)
     shadow["orders"] = keep_o
@@ -256,6 +264,27 @@ def shadow_process(c, shadow, ts, adv, calib):
         else:
             keep_p.append(p)
     shadow["pos"] = keep_p
+    # resolve price-watches: at H_h, grade the (already-missed) fill and tag the
+    # fill-INDEPENDENT price outcome. touch/mfe are diagnostics — calib_apply
+    # only ever moves the hit posterior on FILLED rows, so these never size.
+    keep_w = []
+    for w in watch:
+        hz = min(w.get("H_h", adv["max_hold_h"]), adv["max_hold_h"])
+        if hours_between(w["ts"], ts) < hz:
+            keep_w.append(w)
+            continue
+        touch = None
+        if w.get("target"):
+            t_touch = crossed(w["item"], w["ts"], w["target"], "sell")
+            touch = 1 if (t_touch and hours_between(w["ts"], t_touch) <= hz) else 0
+        favs = [px for t, src, px in series.get(w["item"], [])
+                if src == "ninja" and t > w["ts"] and hours_between(w["ts"], t) <= hz]
+        mfe_pct = round((max(favs) / w["px"] - 1) * 100, 2) if favs else 0.0
+        out = {"filled": 0, "mfe_pct": mfe_pct}
+        if touch is not None:
+            out["touch"] = touch
+        grade(w["pid"], w["sig"], out)
+    shadow["watch"] = keep_w
 
 
 # ------------------------------------------------- league-history feed -----
@@ -640,6 +669,7 @@ def _poll(cfg, io, db_path, store_snap):
     reliability = model_reliability(graded30)
     feature_rel = feature_reliability(graded30)
     fill_hours = fill_by_hour(graded30)
+    touch_rel = model_touch_reliability(graded30)
     gates = update_gates(gates, summary, adv)
     store.kv_set_json(c, "gates", gates)
 
@@ -707,7 +737,7 @@ def _poll(cfg, io, db_path, store_snap):
                  | {"ev_pct": round(p["ev_pct"], 1), "p_hit": round(p["p_hit"], 2),
                     "vol_div": round(p["vol_div"] or 0)} for p in props[:12]],
         "gates": gates, "scoreboard": summary, "reliability": reliability,
-        "feature_rel": feature_rel, "fill_hours": fill_hours,
+        "feature_rel": feature_rel, "fill_hours": fill_hours, "touch_rel": touch_rel,
         "port": {**{k: v for k, v in port.items() if k != "positions"},
                  "deltas": deltas, "bench": bench,
                  "positions": [{"item": i, **{k: round(v, 3) if isinstance(v, float) else v
