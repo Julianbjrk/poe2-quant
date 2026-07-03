@@ -1,94 +1,237 @@
-# QUANT — PoE2 currency day-trading decision-support
+# QUANT v1.0 — PoE2 currency decision-support that grades itself
 
-A **read-only** dashboard: it watches the market and tells you the move; you trade by hand in-game. Nothing here automates gameplay or trading (that would breach GGG's terms — price monitoring does not).
-
-## 1. Local app — scanner + action cards (v0.3)
-**Requirements:** Python 3.10+. No pip installs, stdlib only.
+A **read-only** co-pilot: it watches the market and tells you the move; you trade by hand in-game.
+Nothing here automates gameplay or trading (that would breach GGG's terms — price monitoring does
+not). Python 3.10+, **stdlib only, zero pip installs, zero required configuration.**
 
 ```
-python quant.py --probe   # API health check + scanner dry-run (do this first)
-python quant.py           # serves http://localhost:8377, polls every 5 min
+python quant.py            # serves http://localhost:8377 — that's the whole setup,
+                           #   incl. first-run calibration and update checks
+python quant.py --doctor   # API + database + model health check
+python quant.py --once     # one dry-run poll, printed as JSON
+python quant.py --backtest # walk-forward replay of your own tick history
+python quant.py --bootstrap  # force a re-pretrain from league history
+python quant.py --update     # check GitHub and update in place
+python quant.py --host 0.0.0.0   # LAN mode for a phone (token printed at startup)
 ```
+Just `python quant.py` is enough every time — it bootstraps calibration on first run and checks
+for updates itself. The other commands are for when you want to force one of those by hand.
 
-First run writes `config.json` next to the script. `--once` does a single poll and prints the snapshot JSON. Config reloads on every request, so edits apply on the next refresh.
+## Bootstrap: don't wait two weeks to be calibrated (now automatic)
+On first run for a league, QUANT pulls the league's **daily history since league start** (poe2scout
+DailyStatsHistory, top ~150 items by volume, one polite request each) in the background, then
+re-runs the DIP logic over that history walk-forward — same anchor, idio-vs-market gate, knife
+guard, exit quantile as the live signal — and **measures** how often such dips actually recovered
+and how much of the gap they closed. Those measurements replace the guessed priors (capped at ~30
+pseudo-observations so live graded outcomes keep the final say, never applied over existing live
+evidence), and the fetched history gives every item a league anchor so DIP is calibrated **from
+poll #1**. Runs once per league; `--bootstrap` forces it again. Set `auto_bootstrap: false` in
+config.json to disable.
 
-### DO THIS NOW — the card panel
-Every poll the scanner sweeps **all ~600 exchange-traded currencies** (12 poe.ninja types), checks them against the safety gates, and renders at most `risk.max_cards` action cards in plain language: what to buy, at what ceiling, what to relist it at, the expected profit after estimated fees, and a one-line *why*. Open positions always get their own card (HOLD with the live exit target, SELL when the target is hit, ABANDON when the trend guard trips). When nothing qualifies it says **NO TRADE** — that is advice too, and most polls it's the correct call.
+What the bootstrap honestly cannot do: daily listing medians carry no intraday path, so it can't
+prove your limit orders would have filled. That's the part the shadow book and the 2-week paper
+graduation validate forward — bootstrap shortens the *calibration* ramp, not the *trust* bar.
 
-Three signal types feed the cards:
-- **DIP** — mean reversion: price ≥`dip_trigger_pct` under its own 24h mean (from Quant's tick history; falls back to the 7d sparkline until ~6h of history accumulates), with a knife-guard so it won't catch collapsing items.
-- **MAKE** — patient spread capture on deep books (≥`make_min_volume` div/day): bid under mid, relist over it.
-- **ROUTE** — the same item trading at different effective prices via its exalted pair vs its divine pair on the in-game exchange (from poe2scout's hourly exchange snapshot, self-validated against ninja's ex/div before being trusted). Entry and exit prices on these cards come from the pair data itself.
+## Staying current
+QUANT checks its GitHub branch for a newer `VERSION` on startup and a few times a day. When one
+exists, a banner offers **update & restart** — it downloads the branch via the GitHub API,
+byte-compiles it before trusting it, backs up the old code, swaps it in (your `config*.json` and
+`quant.db` are never touched), and restarts into the new version. Set `auto_update: true` in
+config.json to apply on startup without asking, or `update_branch` to track a different branch.
 
-### The safety gates ("safe" as numbers, in `config.json → risk`)
-A card only appears if **all** of these pass: item volume ≥`min_volume_div_day` (150 div/d default), position ≤`max_pos_pct_volume` of daily volume **and** ≤`max_bankroll_pct` of bankroll **and** within what's left after `liquid_reserve_pct` is held back, round-trip edge after `2×fee_pct_per_side` ≥`min_edge_net_pct`, expected profit ≥`min_profit_ex` (no flips worth pocket lint), and open positions <`max_open_positions`. With a 4-div bankroll this typically means 1–1.5 div positions in highly liquid items only — by design.
+**Private repo?** Then the updater needs a read-only token (a public repo needs none). Create a
+fine-grained Personal Access Token on GitHub scoped to **Contents: Read-only** on just this repo,
+then make it visible to QUANT one of two ways:
+- environment: `export QUANT_GH_TOKEN=github_pat_…` (e.g. in the systemd unit or your shell), or
+- config: add `"github_token": "github_pat_…"` to `config.advanced.json`.
 
-### v0.4 additions
-- **Trades table** (right column): every fill with edit/delete — misclicks are
-  fixable. Edit loads the fill into the form; "Update fill" saves it.
-- **Capital section**: enter your actual liquid currency (div / ex / chaos).
-  It replaces the static `start_capital_div` for sizing and the ribbon
-  baseline; fills logged after setting subtract from it. If a card's buy
-  needs more exalted than you hold, it says how many div to convert first and
-  charges the extra fee leg in the expected profit.
-- **Visual feedback**: taking a card flashes a toast, marks the card ✓ logged,
-  and greys it out; edits/deletes confirm via toast too.
-- **League-long history**: daily average price + volume since league start
-  (poe2scout `DailyStatsHistory`) is backfilled for scanner candidates and
-  held items. Each candidate gets a 14-day z-score: DIPs that aren't actually
-  cheap vs league history get downgraded to MED confidence, genuinely cheap
-  ones (z ≤ −1.5) say so in the why-line.
+The token is sent only to `api.github.com` for this one repo, never logged, never committed.
 
-### Paper mode (default ON)
-`"paper_mode": true` keeps a separate practice ledger: card buttons become one-click **Take it (paper)** and the ribbon tracks paper net worth (real net worth shown small under Holdings). Let it run for a few days; if the paper curve beats holding, set `paper_mode` to `false` — buttons then prefill the fill form for your real, in-game-confirmed numbers instead. Paper and real fills never mix.
+## Recording trades — price is *per unit*, and the item name binds to the data
+When you log or take a fill, **price is per unit, in exalted** — the same "X ex each" the card
+shows, not the order total. The form previews `qty × price = total` so it's unambiguous. The item
+field has a **type-to-filter dropdown** drawn from everything the scanner prices (plus what you
+hold/traded) — start typing and click a match (or press Enter) — and a live indicator shows whether
+your entry binds to a known item. Even if you paste a name that
+differs only by the game's curly apostrophe (`’` vs `'`), case, or stray spaces, the server
+**snaps it to the canonical name** — so your buy and sell always offset and the item gets priced.
+Genuinely unknown items (e.g. a catalyst the scanner can't see) are saved exactly as typed, never
+merged into something else. Got one wrong? Hit **edit** on any row in the Trades table (under
+*Record ▸*): it appends a correction event (nothing is ever rewritten) and every position,
+benchmark and net-worth number re-folds automatically.
 
-## 2. Claude artifact — zero setup
-Open `poe2-quant-dashboard.jsx` as an artifact. **Refresh prices** has Claude fetch current data via web search (~30–60s, uses your Claude usage — this replaces background polling, which browser artifacts can't do). **What's my move?** sends your snapshot + positions + rules to Claude for ≤5 prioritized actions. Positions, fills, and snapshots persist privately to your account between sessions. Settings panel accepts the exact same JSON as `config.json`. (The artifact predates the v0.3 scanner — it covers the manual-watchlist workflow only.)
+Resting orders (paper) are actionable: expand one with **show card** to see its plan again, then
+**I bought it** or **I sold it**. The `filled __ of N` box lets you log a **partial fill** — record
+just the part that actually filled, and the remainder keeps resting as its own order. Names and
+price come straight from the order, so they always match. **Cancel all** clears every resting order
+at once (held positions untouched). Resting orders count as pending commitments — against both your
+position cap and free capital — so unfilled bids can't pile up and silently over-commit you.
 
-## Wiring in your Fable 5 playbook
-The watchlist (`plays`) is now optional — the scanner finds opportunities on its own. Keep using plays for longer-horizon theses from your playbook (uniques, league-mechanic bets) that the currency scanner doesn't cover.
-After the strategist prompt produces play cards, paste them back to Claude with:
+If a held item shows a **CHECK … not in the scanner** card (a position whose name doesn't match
+the priced data — e.g. a typo, or an old apostrophe mismatch), you have three ways to resolve it:
+**match to a scanned item** (pick the right name from the dropdown and it re-keys the position so
+it prices correctly), **I sold it** (log the sale to close it), or the small **×** in the corner to
+**stop tracking it** entirely. All are event-sourced — fills are voided and (for a match)
+re-appended under the canonical name; nothing is destroyed.
 
-> Convert each play card into this JSON schema, one object per play:
-> `{"id":"short_id","label":"name","source":"exchange:<NinjaType>|unique:<category>|currency:<category>|auto","match":"item name (fuzzy ok)","entry_max_ex":N,"exit_target_ex":N,"abandon_drop_pct":N,"budget_div":N,"notes":""}`
+## Why did the cards disappear? — the status line
+Above the cards there's always a one-line status: items scanned, positions held, resting orders,
+new ideas, and divines free to deploy. When there are no new buys it tells you the reason —
+"all 3 position slots are in use", "no liquid capital free to deploy (set/raise holdings)",
+"paused — the whole market is moving hard", or the closest near-miss. An empty board is never a
+mystery: most of the time it just means sitting tight is correct, and now it says so.
 
-Drop the result into `config.json` → `plays` (local) or Settings (artifact). `source` is ignored by the artifact (Claude finds the item by name); the local app uses it to route the right API. **When unsure, use `"source": "auto"`** — it searches poe2scout's full item index (~1,300 items across every category) by name.
+## The whole app is one question
+The page is a single column: a header strip (net worth vs the **worst** of three benchmarks,
+one freshness dot), a one-sentence **trust line** ("Last 30d: 41 closed calls · 29 hit target ·
+avg +2.1% per trade"), and the **NOW list** — at most 3 cards, exits first. Everything else lives
+behind *Record ▸* and *Engine room ▸*. Cards are literal: **"BUY 8× Test Orb — set 351 ex → 4
+(87.8 ex each)"** is the exact ratio you type into the exchange, odds are plain ("works about
+7 in 10"), and *details ▸* opens the full reasoning trace. When nothing qualifies you get the
+flagship state: **"Nothing worth your divines right now"** plus the closest miss and why — most
+polls, that is the correct call.
 
-### Source kinds (local app)
-- `exchange:<Type>` — poe.ninja in-game Currency Exchange data. Working types (case-sensitive, verified by `--probe`): `Currency Fragments Essences Runes SoulCores LineageSupportGems Expedition Ritual Abyss Delirium UncutGems Idols`. Common aliases are accepted (`omens`→`Ritual`, `emotions`→`Delirium`). Gives price, 7-day sparkline trend, and daily traded volume in div.
-- `unique:<category>` — poe2scout uniques: `armour weapon accessory jewel flask map sanctum`. Gives price (in ex), 7-day trend from daily price logs, and current listing count.
-- `currency:<category>` — poe2scout currency-likes: `currency fragments runes essences ultimatum expedition ritual vaultkeys breach abyss uncutgems lineagesupportgems delirium incursion idol verisium vaal`. Covers things ninja doesn't carry (talismans, waystones live here too via `auto`).
-- `auto` — name-only lookup through poe2scout's `/Items` index, then enriched with price logs + listing count from the right category endpoint. Slowest but finds anything.
+## Every card is a forecast, and forecasts get graded
+This is the core design. Each card writes a prediction record (fill odds, hit odds, expected
+return, model version, features) **before** the outcome is knowable. A **shadow book** then takes
+every card whether you do or not — resting orders fill only when the market actually trades
+through the price — so the system grades ~20 forecasts a week even if you trade twice. Outcomes
+are scored with proper scoring rules (Brier, CRPS), feed conjugate posteriors that replace the
+magic constants (reversion fraction, spread capture, hit rates), and signals that can't earn their
+keep are **auto-gated off, visibly,** while they keep shadow-trading to earn their way back. Gating
+has two independent triggers: the realized **edge** can't clear zero, or the fills **hit far less
+often than the forecasts promised** (a signal can fire hundreds of times yet rarely close, so the
+edge test never trips — the hit-calibration test catches it). *NO EDGE is a finding, the way NO
+TRADE is advice.*
 
-Matching is fuzzy: exact > prefix > substring > all-words, case/apostrophe-insensitive. A play that matches nothing produces a dashboard signal with the three closest real item names, so typos are self-diagnosing.
+The odds a card shows are the **empirically-measured** frequency of exactly the event the shadow
+book grades — a first-passage touch of the target within the forecast's own horizon — so they
+match reality by construction and self-correct as outcomes accrue. The model's own estimate is kept
+as a diagnostic (`p_model`, in Engine room → reliability) so it's possible to tell whether the model
+adds per-card information beyond the pooled rate. (**Upgrading to v1.2 / model `m2`:** because that
+release redefined the graded event, the per-signal calibration and the auto-gates **reset once** on
+first run — they were measured under the old definition; your trade ledger, paper track record, and
+the full prediction history are preserved. DIP re-seeds from your last `--bootstrap` automatically;
+re-run `python quant.py --bootstrap` if you want to refresh it.)
 
-## League
-`"league": "auto"` (the default) resolves to the current softcore league via poe2scout's league list at every poll — league rollovers need no config edit. You can also pin an explicit name (`"Runes of Aldur"`) or a short name (`"runes"`); names are validated and a warning signal appears if the league isn't recognized.
+**Upgrading to v1.4.x / model `m3`:** fill forecasts are now **evidence-weighted** (the shown
+`p_fill` follows the measured fill rate as it accrues, not an optimistic touch model) and the whole
+calibration is **recency-weighted** (posteriors relax toward their priors on a 14-day half-life, so
+the current regime outweighs stale early-league evidence). Because the fill event's definition and
+the calibration dynamics changed, the per-signal calibration and auto-gates **reset once** again on
+first run; your trade ledger, paper track record, and full prediction history are preserved, and DIP
+re-seeds from your last `--bootstrap` (re-run it to refresh). The Kalman volatility estimate and the
+OU reversion-speed fit were also corrected in this line.
+
+Crucially, the shadow book keeps forecasting the **top opportunities every poll regardless of
+whether you have a free slot or capital to act** (up to `shadow_cap`), so the self-evaluation never
+stalls just because your positions are full — the app can always answer "is it working?"
+
+**Paper mode is the default** and uses the same honest fill engine (no instant-fill fiction). The
+settings panel shows a **graduation rule**: the app recommends real mode only when ≥14 days of
+paper alpha clear a t-test against the worst benchmark. It will tell you when it has earned it.
+
+## How it predicts (honest version)
+- **Latent price filter** — poe.ninja and poe2scout numbers are treated as what they are: noisy,
+  lagged observations. A per-item Kalman filter (level + drift) fuses them; disagreement widens
+  uncertainty, and wide uncertainty fails the entry gates on its own. The drift estimate is the
+  knife-guard.
+- **Mean reversion as a model, not a constant** — per-item OU/AR(1) fit on hourly bars (anchor =
+  median of the window; the AR intercept extrapolates trends and is not trusted). The exit target
+  is placed where the model gives ≥65% odds of reaching by the horizon, never above the mean. An
+  item must have *demonstrated* reversion in its own history before DIP will risk money on it.
+- **Factor structure** — deviations decompose into market (liquidity-weighted index of the top-20,
+  also the third benchmark), family, and idiosyncratic parts. Only idiosyncratic dips are trades;
+  market-wide moves trip a circuit breaker that pauses entries and says so.
+- **Execution is part of the forecast** — fees come from a measurable curve
+  (`config.advanced.json → fee_curve`), entries/exits are quantized to real in-game integer ratios
+  (items too cheap to express cleanly are rejected — that's the lot-size guard, principled), and
+  exits anchor to the thesis, never to your cost basis.
+- **Sizing** — fractional Kelly on the conservative tail of the calibrated hit posterior, capped
+  by % of daily volume, liquid reserve, and a per-family budget (three essence dips are one bet).
+  Each card explains its own size.
+
+## Signals
+- **DIP** — idiosyncratic dip in a reverting item (OU + factor gates + knife/freefall guards).
+- **MAKE** — patient spread capture on deep books (≥600 div/day), spread never quoted inside the noise.
+- **ROUTE** — the same item priced differently via its exalted/divine/chaos books
+  (poe2scout SnapshotPairs). True arbitrage; both books named on the card; verify in-game first,
+  pair data is up to an hour old. Every book is sanity-checked against the **exalted book** (the
+  base unit, the reliable price) — so a coarse, lot-distorted divine/chaos book can't fabricate a
+  phantom "+273%" gap, and divergences above `route_max_dev_pct` are rejected as too-good-to-be-true.
+- **PARITY** — deterministic conversion recipes (e.g. 3:1 distilled-emotion instilling) priced
+  against the market. Recipes are config data in `config.advanced.json → recipes`: do each once
+  with one unit, then set `"verified": true` — unverified recipes stay humble and say so.
+- **Pins** — your manual theses (`config.json → pins`): matched by name, card fires at your entry
+  ceiling. For uniques and league bets the scanner can't see.
+
+## Configuration: 0 required, 2 optional
+First run writes `config.json` with `league: auto` (resolves the current softcore league at every
+poll), `mode: paper`, `risk: conservative`, `pins: []`. The risk dial and paper/real toggle are in
+the UI. Everything else — gates, horizons, priors, fee curve, recipes, poll cadence — lives in
+`config.advanced.json` (absent by default; every key documented in `quant/config.py`).
+
+**Migrating from v0.4** is automatic: old `config.json` is folded in (backup written next to it),
+old fills/ticks/holdings import into the event ledger on first run.
+
+## Your data is preserved for later analysis
+QUANT keeps the DB small by holding only a rolling ~14-day window of 5-minute ticks — but it does
+**not throw the older ones away**: just before pruning, it appends them to monthly CSV files under
+`data_archive/` (kept forever, append-only). The permanent hourly bars, the full forecast ledger
+(every prediction + its graded outcome), and the whole decision log stay in the DB indefinitely.
+So even if the tool turns out not to be worth running, you're left with a complete, replayable,
+*unbiased* record — what the market did, what was predicted, and what actually happened — which is
+exactly what a future/better algorithm needs (replay it with `--backtest`). Set
+`archive_ticks: false` in `config.advanced.json` to opt out.
+
+`python quant.py --export [dir]` writes a portable research bundle (default `quant_export/`):
+`predictions.jsonl` (the labeled forecast→outcome dataset), `bars.csv` (permanent hourly history),
+and `ticks_live.csv` (the current high-res window; the rest is already in `data_archive/`). Both
+`data_archive/` and `quant_export/` are gitignored — it's your private history. The one thing the
+tool can't protect against is you deleting `quant.db` and `data_archive/`, so back those up if the
+long-term record matters to you.
+
+## Architecture (for the next reader)
+```
+quant.py            thin shim — the run command never changes
+quant/
+  config.py         surface + advanced config, presets, recipes
+  sources.py        poe.ninja / poe2scout adapters + contract checks (LiveIO)
+  store.py          SQLite WAL: append-only event ledger (fills/orders/voids are
+                    events, state is a fold — corrections never rewrite history),
+                    per-source ticks, hourly bars, prediction ledger
+  models.py         Kalman latent filter, OU fit, fill-time model, ratio
+                    quantizer, fee curve
+  signals.py        DIP / MAKE / ROUTE / PARITY → proposals (forecasts)
+  score.py          Brier/CRPS, conjugate calibration, auto-gates, trust line,
+                    graduation rule
+  engine.py         the poll pipeline + card lifecycle + shadow book + sizing
+  server.py, ui.py  JSON API + the one-question page
+  backtest.py       walk-forward replay (no peeking) vs persistence baseline
+  main.py           CLI + doctor
+tests/              46 tests, fixture-driven; python -m unittest discover -s tests
+```
+The validation ladder for any strategy change: backtest on your tick history → live shadow A/B →
+only then default-on. Tuning by vibes is the failure mode this app exists to prevent.
 
 ## Data sources
-- **poe.ninja PoE2 exchange API** — `https://poe.ninja/poe2/api/economy/exchange/current/overview?league=<name>&type=<Type>`. Used for the ex/div rate (from `core.rates`), exchange goods, sparkline trends, and volume. Note: item names live in the top-level `items` list; `core.items` only holds divine/exalted/chaos (this caused silent match failures in v0.1).
-- **poe2scout API** — realm-scoped REST, OpenAPI at `/api/openapi.json` (swagger UI at `/api/swagger`). Endpoints used: `GET /api/poe2/Leagues` (league list + DivinePrice, also the ex/div fallback if ninja is down), `GET /api/poe2/Leagues/<league>/Uniques/ByCategory` and `…/Currencies/ByCategory` (paginated, `ReferenceCurrency=exalted` so prices arrive in ex), `GET …/Items` (full item index for `auto` lookups), `…/Items/Categories`, and `…/SnapshotPairs` (hourly snapshot of every in-game exchange pair — both directions, traded volume, stock; powers the ROUTE signal; fetched at most once an hour). Fields are PascalCase (`CurrentPrice`, `PriceLogs`, `CurrentQuantity`).
-- **Quant's own tick history** — every poll appends changed prices to a `ticks` table in `quant.db` (deduped, 14-day retention). This is what the 24h mean-reversion math runs on; signals visibly sharpen over the first day as history accumulates (the scanner panel shows `intraday history Nh`).
+- **poe.ninja PoE2 exchange** — `/poe2/api/economy/exchange/current/overview?league=<L>&type=<T>`;
+  types: `Currency Fragments Essences Runes SoulCores LineageSupportGems Expedition Ritual Abyss
+  Delirium UncutGems Idols`. Prices, ex/div rate (`core.rates`), daily traded volume.
+- **poe2scout** — `/api/poe2/Leagues` (league resolve + DivinePrice fallback) and
+  `…/SnapshotPairs` (hourly snapshot of every in-game exchange pair → ROUTE legs + extra latent
+  observations). OpenAPI at `/api/openapi.json` if an endpoint moves; `--doctor` sweeps everything.
+- Polling is polite (5-min default, identifying User-Agent, pairs at most hourly). Endpoint shapes
+  verified 2026-06-12; recorded fixtures in `tests/fixtures/` pin the contracts.
 
-Endpoint shapes were verified live against both APIs on 2026-06-12. Third-party APIs change — `--probe` sweeps every endpoint and dry-runs the scanner + each play with the resolved league, so run it whenever data looks off. The 5-min poll exists to catch aggregator refreshes early and build tick history; the sources themselves refresh every few minutes to an hour, and the dashboard shows data age in the header. The poller sends an identifying User-Agent and stays well under polite request rates.
-
-## Liquidity (the Liq column)
-Aggregator prices are listing medians, not fills. The Liq column shows poe.ninja daily traded volume (`N div/d`) for exchange goods, or poe2scout current listing count (`N listed`) for scout-sourced items. **A price with `1 listed` next to it is one troll listing, not a market** — during testing, a leveling unique "priced" at 887 div showed exactly this. Treat low-liq prices as noise.
-
-## The math model (honest version)
-- Bankroll is converted once: `start_capital_div × (ex/div at first snapshot)`. Liquid = that minus net ex spent on fills. Net worth = (liquid + positions marked to latest price) ÷ current ex/div.
-- Benchmark is **holding your starting divines**, which is flat in div terms — the ribbon shows your net worth against it. A drift chip warns when ex/div moves ≥5% so you re-check ex-denominated targets.
-- Card edges are *estimates*: DIP assumes 70% reversion to the 24h mean, MAKE assumes the configured spread is capturable, ROUTE takes the measured pair divergence minus a 2% slippage buffer; all are then haircut by `2×fee_pct_per_side`. Expected-profit numbers are decision aids, not promises.
-- 7-day trend comes from poe.ninja sparklines / poe2scout price logs; the ABANDON rule fires on trend, the ENTRY/EXIT rules on price vs thresholds; an EXIT that stays live past `no_fill_hours` escalates to a reprice nudge.
-
-## Limits
-- **No API can see your own listings or exchange orders** (there is no public stash river for PoE2), so fills are logged manually — the card buttons make it one click (paper) or a prefilled form (real).
-- Prices are aggregator estimates and pair data is up to an hour old: always sanity-check the live exchange before committing >1 div, exactly as the playbook's Day-0 checklist says. ROUTE divergences especially can close before you act — the why-line shows both route prices so the in-game check takes seconds.
-- Exchange gold fees are modeled only as the flat `fee_pct_per_side` estimate; tune it once you've seen real fees, and remember gold is a separate resource the dashboard can't see.
-- Entry cards are re-ranked every poll, so a marginal candidate can swap out between polls; cards for positions you hold never disappear. (Card persistence/hysteresis is a planned pass-2 item, along with browser notifications and the self-grading scoreboard.)
-
-## Troubleshooting
-- Start with `python quant.py --probe`: it lists leagues, sweeps every ninja type, checks every scout endpoint, and dry-runs each of your plays, printing OK/MISS per play with the matched name, price, trend, and liquidity.
-- A play shows "no match for …" → the signal already lists the three closest real item names; copy the right one into `match`, or switch the play to `"source": "auto"`.
-- `--probe` FAIL on poe.ninja/poe2scout → the API moved again: check `https://poe2scout.com/api/openapi.json` and update the fetch layer in `quant.py` (everything lives in the `poe.ninja` / `poe2scout` sections near the top).
-- Artifact refresh returns junk → just hit it again; the parser rejects non-JSON replies rather than storing garbage.
+## Limits (still honest)
+- No API can see your own orders — fills are confirmed by you (one tap in paper, two prefilled
+  fields in real). The exchange's gold fee is an estimate until you measure it once and set
+  `fee_curve`; gold itself is a resource the dashboard can't see.
+- Aggregator prices are listing medians and pair data is up to an hour old: sanity-check the live
+  exchange before committing >1 div, especially ROUTE divergences — the card names both books so
+  the check takes seconds.
+- Uniques aren't scanned (listing counts aren't traded volume, so the safety gates can't do their
+  job) — pin them instead.
+- `poe2-quant-dashboard.jsx` (the Claude-artifact edition) is **frozen**: superseded by the local
+  app; kept for reference.

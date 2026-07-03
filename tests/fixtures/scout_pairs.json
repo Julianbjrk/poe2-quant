@@ -1,0 +1,20 @@
+[
+  {
+    "CurrencyOne": {"ApiId": "divine", "Text": "Divine Orb"},
+    "CurrencyTwo": {"ApiId": "exalted", "Text": "Exalted Orb"},
+    "CurrencyOneData": {"RelativePrice": 401.0, "VolumeTraded": 900, "ValueTraded": 360900},
+    "CurrencyTwoData": {"RelativePrice": 1.0, "VolumeTraded": 900, "ValueTraded": 360900}
+  },
+  {
+    "CurrencyOne": {"ApiId": "test-orb", "Text": "Test Orb"},
+    "CurrencyTwo": {"ApiId": "exalted", "Text": "Exalted Orb"},
+    "CurrencyOneData": {"RelativePrice": 100.0, "VolumeTraded": 60, "ValueTraded": 6000},
+    "CurrencyTwoData": {"RelativePrice": 1.0, "VolumeTraded": 60, "ValueTraded": 6000}
+  },
+  {
+    "CurrencyOne": {"ApiId": "test-orb", "Text": "Test Orb"},
+    "CurrencyTwo": {"ApiId": "divine", "Text": "Divine Orb"},
+    "CurrencyOneData": {"RelativePrice": 112.0, "VolumeTraded": 40, "ValueTraded": 4480},
+    "CurrencyTwoData": {"RelativePrice": 0.28, "VolumeTraded": 40, "ValueTraded": 4480}
+  }
+]

@@ -1,7 +1,16 @@
 # personal state — regenerated on first run / contains your trade history
 quant.db
 config.json
+config.advanced.json
 once.json
 once.err
 __pycache__/
 *.pyc
+
+# preserved research data + exports — your local history, never tracked
+data_archive/
+quant_export/
+
+# updater scratch — never tracked
+.quant_backup/
+.quant_update_tmp/
