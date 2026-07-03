@@ -3,8 +3,8 @@ import random
 import unittest
 
 from quant.models import (best_ratio, fee_pct, fit_ou, kf_drift_z, kf_level,
-                          kf_new, kf_step, ou_horizon, prob_ge, touch_median_h,
-                          touch_prob, weighted_median)
+                          kf_new, kf_sig_h, kf_step, ou_horizon, prob_ge,
+                          touch_median_h, touch_prob, weighted_median)
 from quant.util import snap_name
 
 
@@ -68,6 +68,25 @@ class TestKalman(unittest.TestCase):
         for _ in range(20):
             kf_step(st, 1.0, {"ninja": math.log(100), "pairex": math.log(102)})
         self.assertTrue(math.log(100) < kf_level(st) < math.log(102))
+
+    def test_rv_tracks_true_volatility(self):
+        # kf_sig_h must estimate the item's own per-√hour volatility, not the
+        # obs-noise floor the old rv←0.97·rv+0.03·y² collapsed to. Simulate a log
+        # random walk at 5-min steps for two items 10× apart in true volatility;
+        # both estimates must land within [0.5×, 1.5×] of truth. (Obs noise 0.3%
+        # is representative of liquid-currency aggregator jitter; at that level
+        # the low-vol item is separable from noise in 1000 samples.)
+        for sigma_h in (0.005, 0.05):
+            random.seed(11)
+            st = kf_new(math.log(100))
+            level, dt = math.log(100), 1.0 / 12.0
+            step_sd = sigma_h * math.sqrt(dt)
+            for _ in range(1000):
+                level += random.gauss(0, step_sd)
+                kf_step(st, dt, {"ninja": level + random.gauss(0, 0.003)})
+            est = kf_sig_h(st)
+            self.assertGreater(est, 0.5 * sigma_h, f"under: sigma_h={sigma_h} est={est}")
+            self.assertLess(est, 1.5 * sigma_h, f"over: sigma_h={sigma_h} est={est}")
 
 
 class TestOU(unittest.TestCase):

@@ -39,6 +39,7 @@ def kf_predict(st, dt_h):
     p01 = p[0][1] + dt * p[1][1]
     p11 = p[1][1]
     q = st["rv"]
+    st["_p00_noq"] = p00   # FPF'₀₀ before process noise — the baseline the rv estimator subtracts
     st["P"] = [[p00 + q * dt, p01], [p01, p11 + q * dt * 0.02]]
 
 
@@ -53,17 +54,34 @@ def kf_update(st, z, source):
     st["m"] = [m[0] + k0 * y, m[1] + k1 * y]
     st["P"] = [[(1 - k0) * p[0][0], (1 - k0) * p[0][1]],
                [p[1][0] - k1 * p[0][0], p[1][1] - k1 * p[0][1]]]
-    # adaptive noise: innovation feeds both obs noise and process scale
+    # adaptive OBSERVATION noise only — the process-variance (rv) estimate moved
+    # to kf_step, which can subtract this R and the predicted level variance to
+    # isolate the item's true per-hour volatility rather than the noise floor.
     st["R"][source] = clamp(0.95 * R + 0.05 * max(y * y - p[0][0], 1e-8), 1e-6, 0.25)
-    st["rv"] = clamp(0.97 * st["rv"] + 0.03 * y * y, 1e-6, 0.01)
     st["n"] += 1
+    return y, R
 
 
 def kf_step(st, dt_h, obs):
-    """obs: {source: log_price}. One predict, sequential updates."""
+    """obs: {source: log_price}. One predict, sequential updates. The first
+    update's innovation drives the process-variance estimate: E[y²] = S =
+    FPF'₀₀ + q·dt + R, so (y² − FPF'₀₀ − R)/dt is a method-of-moments estimate
+    of the per-hour volatility q — tracking the item's own volatility, not the
+    obs-noise floor the old rv ← 0.97·rv + 0.03·y² converged to."""
     kf_predict(st, dt_h)
+    dt = clamp(dt_h, 1e-3, 48.0)
+    first = True
     for source, z in obs.items():
-        kf_update(st, z, source)
+        yR = kf_update(st, z, source)
+        if first and yR is not None:
+            y, R = yR
+            # (y² − FPF'₀₀ − R)/dt is a per-sample estimate of q; it is SIGNED on
+            # purpose — samples below expectation must cancel those above, or the
+            # estimate biases upward toward the obs-noise floor (the very bug this
+            # fixes). Only the smoothed rv is floored, never the raw contribution.
+            st["rv"] = clamp(0.97 * st["rv"] + 0.03 * (y * y - st["_p00_noq"] - R) / dt,
+                             1e-6, 1e-2)
+            first = False
 
 
 def kf_level(st):

@@ -57,11 +57,14 @@ def make_cfg():
 
 def dip_script():
     """An item that has DEMONSTRATED reversion (three dip-and-recover cycles),
-    then dips again — only such items deserve a confident forecast."""
+    then dips sharply and STABILISES — a real dip, not a falling knife. The
+    stabilisation tail matters: the drift estimate must decay back above the
+    knife-guard before DIP will fire (correctly, post the rv-estimator fix)."""
     calm = lambda n: [100.0 + (0.3 if i % 2 else -0.3) for i in range(n)]
     cycle = lambda lo: [lo, lo + 1.5, lo + 3.0, 100.3]
     return (calm(8) + cycle(96.0) + calm(4) + cycle(95.5) + calm(4)
-            + cycle(96.5) + calm(4) + [95.0, 91.5, 89.0, 88.3, 88.5, 88.4, 88.5])
+            + cycle(96.5) + calm(4) + [95.0, 91.5, 89.0, 88.3]
+            + [88.5, 88.4, 88.5, 88.5, 88.4, 88.5])
 
 
 class TestEngine(unittest.TestCase):
@@ -165,10 +168,15 @@ class TestEngine(unittest.TestCase):
         pos = store.positions(c, "paper")
         self.assertAlmostEqual(pos["Test Orb"]["qty"], card["qty"])
         c.close()
-        # price recovers through the target → shadow closes, prediction graded,
-        # and the held position turns into a SELL exit card
-        self.io.test_px = target + 2.0
-        snap = self.run_poll()
+        # price recovers well through the target → shadow closes on the raw tick
+        # cross and the prediction is graded a hit; the held position then shows a
+        # SELL exit card once the smoothed mark confirms. Prices vary each poll as
+        # real ones do — a dead-constant quote is (correctly) skipped as a stale
+        # repeat, so it would never move the mark.
+        for i in range(3):
+            self.io.test_px = 100.0 + (0.3 if i % 2 else -0.3)
+            snap = self.run_poll()
+            self.io.step(1)
         c = store.connect(self.db)
         graded = store.predictions_graded(c, 30)
         dip_hits = [g for g in graded if g["item"] == "Test Orb" and g["sig"] == "DIP"
