@@ -7,7 +7,10 @@ always be replayed and can never be silently poisoned.
 
 Tables:
   events       append-only ledger (kind + JSON payload)
-  ticks        per-source raw observations, 5-min cadence, kept ~14 days
+  ticks        per-source raw observations, 5-min cadence, kept ~14 days.
+               ticks.vol_div holds div/day VALUE for ninja rows but TRADE
+               COUNT for pair rows (pairex/pairdiv) — the backtest replays
+               pair books from it.
   bars         hourly OHLC per item+source, kept forever (slow models fit here)
   daily        league-long daily avg/vol from poe2scout
   predictions  one row per forecast a card made; graded in place when known

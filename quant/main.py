@@ -1,5 +1,6 @@
 """CLI. `python quant.py` serves; --doctor checks everything; --once prints a
-snapshot; --backtest replays your own tick history walk-forward."""
+snapshot; --backtest replays your own tick history walk-forward;
+--backtest-sweep grid-searches the DIP entry knobs over that same history."""
 import json
 import secrets
 import sys
@@ -121,6 +122,10 @@ def main(argv=None):
         sys.exit(doctor())
     if "--once" in argv:
         print(json.dumps(poll(config.load(), LiveIO(), store_snap=False), indent=2))
+        return
+    if "--backtest-sweep" in argv:
+        from .backtest import DEFAULT_GRID, sweep
+        sweep(config.load(), DEFAULT_GRID)
         return
     if "--backtest" in argv:
         from .backtest import run

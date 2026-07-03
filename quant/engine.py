@@ -347,7 +347,9 @@ def _poll(cfg, io, db_path, store_snap):
     rows_t = [(nm, "ninja", p, vol.get(nm)) for nm, p in px.items()]
     for item, rts in routes.items():
         for major, d in rts.items():
-            rows_t.append((item, PAIR_SRC.get(major, "pairex"), d["px_ex"], None))
+            # vol slot carries TRADE COUNT for pair rows (div/day value for ninja
+            # rows) — Task 3 replays pair books from this for ROUTE backtesting
+            rows_t.append((item, PAIR_SRC.get(major, "pairex"), d["px_ex"], d["trades"]))
     n_ticks = store.insert_ticks(c, ts, rows_t, cache) if store_snap else 0
 
     # ---- latent filters -------------------------------------------------
